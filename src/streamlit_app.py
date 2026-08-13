@@ -10,7 +10,7 @@ import streamlit as st
 from data_loader import load_data
 from scoring import load_models, score
 
-st.set_page_config(page_title="UW Risk Scoring", layout="wide")
+st.set_page_config(page_title="Commercial UW Risk Intelligence", layout="wide", page_icon="📊")
 
 # cache_resource: loaded once per server session, not on every widget interaction
 @st.cache_resource
@@ -42,18 +42,20 @@ CATEGORICAL_OPTIONS = {
 }
 LOB_OPTIONS = book["line_of_business"].unique().tolist()
 
-st.title("UW Risk Scoring")
-mode = st.sidebar.radio("Mode", ["Explore Book", "Score a Submission"])
+st.title("Commercial UW Risk Intelligence")
+st.caption("Model-driven Loss Propensity scoring for commercial submissions")
+mode = st.sidebar.radio("View", ["Portfolio Overview", "New Submission"])
 
-st.sidebar.info(
-    "Scope note: only Loss Propensity is live right now (frequency, severity, large-loss "
-    "models). Bind Propensity and Appetite/Capacity aren't trained yet, so broker fields "
-    "don't affect the score below - that's next."
+st.sidebar.markdown("---")
+st.sidebar.caption(
+    "**Model scope:** this predicts Loss Propensity only (claim frequency, severity, and "
+    "large-loss models). Bind Propensity and Appetite/Capacity are not yet part of this "
+    "model, so broker selection does not currently affect the predicted score."
 )
 
 # ============================================================================
-if mode == "Explore Book":
-    st.header("Existing Book")
+if mode == "Portfolio Overview":
+    st.header("Portfolio Overview")
 
     c1, c2, c3 = st.columns(3)
     lob_filter = c1.selectbox("Line of Business", ["All"] + sorted(LOB_OPTIONS))
@@ -79,7 +81,7 @@ if mode == "Explore Book":
     fig_hist = px.histogram(
         filtered, x="loss_propensity_score_v2", nbins=20,
         labels={"loss_propensity_score_v2": "Loss Propensity Score"},
-        color_discrete_sequence=["#1f77b4"],
+        color_discrete_sequence=["#1F3864"],
     )
     fig_hist.update_layout(
         yaxis_title="Number of Submissions", xaxis_title="Loss Propensity Score (10=best, 100=worst)",
@@ -128,9 +130,8 @@ if mode == "Explore Book":
 
 # ============================================================================
 else:
-    st.header("Score a New Submission")
-    st.caption("Fill in the fields below and score it through the actual trained models - "
-               "not a lookup, a live prediction.")
+    st.header("New Submission")
+    st.caption("Enter the submission details below to generate a model-predicted risk score.")
 
     with st.form("submission_form"):
         col1, col2, col3 = st.columns(3)
@@ -172,6 +173,23 @@ else:
 
     if submitted:
         building_age_years = 2026 - year_built
+        validation_errors = []
+        if roof_age_years > building_age_years:
+            validation_errors.append(
+                f"Roof Age ({roof_age_years} years) cannot exceed Building Age ({building_age_years} "
+                f"years, based on Year Built) - a roof cannot be older than the building it's on."
+            )
+        if prior_claim_count == 0 and prior_total_incurred_usd > 0:
+            validation_errors.append(
+                "Prior Total Incurred is greater than $0 but Prior Claim Count is 0 - there can't be "
+                "incurred losses with no prior claims on file."
+            )
+
+        if validation_errors:
+            for e in validation_errors:
+                st.error(e)
+            st.stop()
+
         row = pd.DataFrame([{
             "line_of_business": lob, "construction_type": construction_type, "year_built": year_built,
             "building_age_years": building_age_years, "square_footage": square_footage,
@@ -192,42 +210,37 @@ else:
         result = score(row, models).iloc[0]
 
         st.subheader("Result")
-        gauge_col, metric_col = st.columns([1, 2])
 
+        gauge_col, metric_col = st.columns([1, 1])
         with gauge_col:
             score_val = result["loss_propensity_score_v2"]
             gauge_color = "#2ca02c" if score_val < 40 else ("#f4d03f" if score_val < 70 else "#d62728")
             fig_gauge = go.Figure(go.Indicator(
                 mode="gauge+number",
                 value=score_val,
-                number={"suffix": "", "font": {"size": 36}},
+                number={"font": {"size": 34}},
                 gauge={
-                    "axis": {"range": [10, 100]},
-                    "bar": {"color": gauge_color},
+                    "axis": {"range": [10, 100], "tickwidth": 1},
+                    "bar": {"color": gauge_color, "thickness": 0.35},
                     "steps": [
                         {"range": [10, 40], "color": "#eafaf1"},
                         {"range": [40, 70], "color": "#fef9e7"},
                         {"range": [70, 100], "color": "#fdedec"},
                     ],
+                    "threshold": {"line": {"color": gauge_color, "width": 4}, "thickness": 0.9, "value": score_val},
                 },
-                title={"text": "Loss Propensity Score"},
+                title={"text": "Loss Propensity Score", "font": {"size": 16}},
             ))
-            fig_gauge.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=10))
+            fig_gauge.update_layout(height=220, margin=dict(l=20, r=20, t=40, b=10))
             st.plotly_chart(fig_gauge, use_container_width=True)
 
         with metric_col:
-            r2, r3 = st.columns(2)
-            r2.metric("Predicted Loss Ratio", f"{result['predicted_loss_ratio_pct']:.1f}%")
-            r3.metric("Predicted Annual Claim Frequency", f"{result['predicted_frequency']:.3f}")
-            r4, r5 = st.columns(2)
-            r4.metric("P(Large Loss)", f"{result['p_large_loss']*100:.1f}%")
-            r5.metric("Total Expected Loss Cost", f"${result['total_expected_loss_cost']:,.0f}")
-            st.caption(f"Predicted typical claim size (if one happens): ${result['predicted_attritional_severity']:,.0f}")
-            st.caption(f"Predicted large-claim size (if the large-loss event happens): ${result['expected_large_severity']:,.0f}")
+            st.metric("Predicted Loss Ratio", f"{result['predicted_loss_ratio_pct']:.1f}%")
+            st.metric("Predicted Probability of Large Loss", f"{result['p_large_loss']*100:.1f}%")
 
         if result["loss_propensity_score_v2"] < 40:
-            st.success("Preferred-range risk under this model.")
+            st.success("Preferred risk under this model.")
         elif result["loss_propensity_score_v2"] < 70:
-            st.warning("Standard-range risk.")
+            st.warning("Standard risk under this model.")
         else:
             st.error("High risk under this model - review recommended.")
