@@ -4,6 +4,8 @@ Run: streamlit run streamlit_app.py
 """
 import numpy as np
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from data_loader import load_data
 from scoring import load_models, score
@@ -74,19 +76,55 @@ if mode == "Explore Book":
     m4.metric("Avg Premium", f"${filtered['indicated_annual_premium_usd'].mean():,.0f}")
 
     st.subheader("Loss Propensity Score distribution")
-    st.bar_chart(filtered["loss_propensity_score_v2"].value_counts(bins=10).sort_index())
+    fig_hist = px.histogram(
+        filtered, x="loss_propensity_score_v2", nbins=20,
+        labels={"loss_propensity_score_v2": "Loss Propensity Score"},
+        color_discrete_sequence=["#1f77b4"],
+    )
+    fig_hist.update_layout(
+        yaxis_title="Number of Submissions", xaxis_title="Loss Propensity Score (10=best, 100=worst)",
+        bargap=0.05, height=350, margin=dict(l=10, r=10, t=10, b=10),
+    )
+    fig_hist.update_traces(hovertemplate="Score ~%{x}<br>%{y:,} submissions<extra></extra>")
+    st.plotly_chart(fig_hist, use_container_width=True)
 
     st.subheader("Portfolio Loss Ratio by Line of Business")
     by_lob = filtered.groupby("line_of_business").apply(
         lambda g: g["total_expected_loss_cost"].sum() / g["indicated_annual_premium_usd"].sum() * 100
         if g["indicated_annual_premium_usd"].sum() > 0 else 0, include_groups=False
     )
-    st.bar_chart(by_lob)
+    by_lob_df = by_lob.reset_index()
+    by_lob_df.columns = ["Line of Business", "Loss Ratio (%)"]
+    by_lob_df = by_lob_df.sort_values("Loss Ratio (%)", ascending=True)
+    fig_lob = px.bar(
+        by_lob_df, x="Loss Ratio (%)", y="Line of Business", orientation="h",
+        color="Loss Ratio (%)", color_continuous_scale=["#2ca02c", "#f4d03f", "#d62728"],
+        text="Loss Ratio (%)",
+    )
+    fig_lob.update_traces(texttemplate="%{text:.1f}%", textposition="outside",
+                           hovertemplate="%{y}: %{x:.1f}%<extra></extra>")
+    fig_lob.update_layout(height=380, margin=dict(l=10, r=10, t=10, b=10),
+                           coloraxis_showscale=False, yaxis_title="")
+    st.plotly_chart(fig_lob, use_container_width=True)
 
     st.subheader(f"Matching submissions ({len(filtered):,})")
     show_cols = ["submission_id", "line_of_business", "broker_tier", "total_insured_value_usd",
                  "indicated_annual_premium_usd", "predicted_loss_ratio_pct", "loss_propensity_score_v2"]
-    st.dataframe(filtered[show_cols].head(500), use_container_width=True)
+    st.dataframe(
+        filtered[show_cols].head(500),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "submission_id": "Submission ID",
+            "line_of_business": "Line of Business",
+            "broker_tier": "Broker Tier",
+            "total_insured_value_usd": st.column_config.NumberColumn("TIV", format="$%d"),
+            "indicated_annual_premium_usd": st.column_config.NumberColumn("Premium", format="$%d"),
+            "predicted_loss_ratio_pct": st.column_config.NumberColumn("Loss Ratio", format="%.1f%%"),
+            "loss_propensity_score_v2": st.column_config.ProgressColumn(
+                "Loss Propensity Score", min_value=10, max_value=100, format="%.0f"),
+        },
+    )
 
 # ============================================================================
 else:
@@ -154,16 +192,38 @@ else:
         result = score(row, models).iloc[0]
 
         st.subheader("Result")
-        r1, r2, r3, r4 = st.columns(4)
-        r1.metric("Loss Propensity Score", f"{result['loss_propensity_score_v2']:.0f}",
-                   help="10 = best risk, 100 = worst. Matches the file's own scale.")
-        r2.metric("Predicted Loss Ratio", f"{result['predicted_loss_ratio_pct']:.1f}%")
-        r3.metric("Predicted Annual Claim Frequency", f"{result['predicted_frequency']:.3f}")
-        r4.metric("P(Large Loss)", f"{result['p_large_loss']*100:.1f}%")
+        gauge_col, metric_col = st.columns([1, 2])
 
-        st.write(f"Predicted typical claim size (if one happens): **${result['predicted_attritional_severity']:,.0f}**")
-        st.write(f"Predicted large-claim size (if the large-loss event happens): **${result['expected_large_severity']:,.0f}**")
-        st.write(f"Total expected annual loss cost: **${result['total_expected_loss_cost']:,.0f}**")
+        with gauge_col:
+            score_val = result["loss_propensity_score_v2"]
+            gauge_color = "#2ca02c" if score_val < 40 else ("#f4d03f" if score_val < 70 else "#d62728")
+            fig_gauge = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=score_val,
+                number={"suffix": "", "font": {"size": 36}},
+                gauge={
+                    "axis": {"range": [10, 100]},
+                    "bar": {"color": gauge_color},
+                    "steps": [
+                        {"range": [10, 40], "color": "#eafaf1"},
+                        {"range": [40, 70], "color": "#fef9e7"},
+                        {"range": [70, 100], "color": "#fdedec"},
+                    ],
+                },
+                title={"text": "Loss Propensity Score"},
+            ))
+            fig_gauge.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=10))
+            st.plotly_chart(fig_gauge, use_container_width=True)
+
+        with metric_col:
+            r2, r3 = st.columns(2)
+            r2.metric("Predicted Loss Ratio", f"{result['predicted_loss_ratio_pct']:.1f}%")
+            r3.metric("Predicted Annual Claim Frequency", f"{result['predicted_frequency']:.3f}")
+            r4, r5 = st.columns(2)
+            r4.metric("P(Large Loss)", f"{result['p_large_loss']*100:.1f}%")
+            r5.metric("Total Expected Loss Cost", f"${result['total_expected_loss_cost']:,.0f}")
+            st.caption(f"Predicted typical claim size (if one happens): ${result['predicted_attritional_severity']:,.0f}")
+            st.caption(f"Predicted large-claim size (if the large-loss event happens): ${result['expected_large_severity']:,.0f}")
 
         if result["loss_propensity_score_v2"] < 40:
             st.success("Preferred-range risk under this model.")
