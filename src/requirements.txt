@@ -1,0 +1,8 @@
+pandas
+numpy
+scipy
+openpyxl
+scikit-learn
+statsmodels
+joblib
+streamlit
