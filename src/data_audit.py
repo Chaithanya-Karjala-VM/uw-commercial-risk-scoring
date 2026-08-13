@@ -5,6 +5,7 @@ re-runs correctly against any future version of the file with the same layout.
 Run: python data_audit.py ../data/Copy_of_UW_Risk_Score_Commercial_data.xlsx
 """
 import sys
+import os
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -143,6 +144,7 @@ h("8. Bottom line")
 w(f"{len(issues)} item(s) flagged:" if issues else "No blocking issues found.")
 for i in issues: w(f"- {i}")
 
+os.makedirs("../reports", exist_ok=True)
 with open(OUTPUT_REPORT, "w", encoding="utf-8") as f:
     f.write("\n".join(report))
 print(f"\nSaved: {OUTPUT_REPORT}")

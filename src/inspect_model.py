@@ -10,7 +10,7 @@ import sys
 import pandas as pd
 import joblib
 
-path = sys.argv[1] if len(sys.argv) > 1 else "../models/severity.joblib"
+path = sys.argv[1] if len(sys.argv) > 1 else "../models/frequency_model.joblib"
 saved = joblib.load(path)
 
 

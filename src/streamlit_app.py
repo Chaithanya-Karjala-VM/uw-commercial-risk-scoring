@@ -7,17 +7,29 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from pathlib import Path
 from data_loader import load_data
 from scoring import load_models, score
+from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, group_for_lob
 
 st.set_page_config(page_title="Commercial UW Risk Intelligence", layout="wide", page_icon="📊")
+
+# resolved relative to this file, not the working directory - same fix as data_loader.py/
+# scoring.py, so the logo shows up whether run locally from src/ or launched by Streamlit Cloud
+LOGO_PATH = Path(__file__).resolve().parent.parent / "assets" / "vm_logo.png"
+if LOGO_PATH.exists():
+    st.sidebar.image(str(LOGO_PATH), width=180)
+    st.sidebar.caption("Built at ValueMomentum")
+st.sidebar.markdown("---")
 
 # cache_resource: loaded once per server session, not on every widget interaction
 @st.cache_resource
 def get_models():
     return load_models()
 
-# cache_data: the scored book is recomputed only if the underlying data file changes
+# cache_data: the scored book is recomputed only if the underlying data file changes.
+# Only called inside Portfolio Overview mode below - New Submission mode never needs the
+# whole book scored, so it shouldn't pay that cost on every form submission.
 @st.cache_data
 def get_scored_book():
     df, schema, usable_for, output_cols = load_data()
@@ -25,9 +37,15 @@ def get_scored_book():
     models = get_models()
     return score(df, models)
 
+# lightweight - just the raw columns needed for dropdown options, not the full scoring pass
+@st.cache_data
+def get_raw_book():
+    df, schema, usable_for, output_cols = load_data()
+    return df[["line_of_business", "broker_tier"]]
+
 models = get_models()
-book = get_scored_book()
 freq_saved = models["frequency"]
+raw_book = get_raw_book()
 
 CATEGORICAL_OPTIONS = {
     "construction_type": ["Fire Resistive", "Frame", "Joisted Masonry", "Masonry Non-Combustible", "Non-Combustible"],
@@ -40,7 +58,10 @@ CATEGORICAL_OPTIONS = {
     "wind_zone_tier": ["Low", "Moderate", "High", "Severe"],
     "safety_inspection_findings": ["No Issues Noted", "Minor Issues Noted", "Moderate Issues – Corrective Action Required", "Major Deficiencies Identified"],
 }
-LOB_OPTIONS = book["line_of_business"].unique().tolist()
+LOB_OPTIONS = raw_book["line_of_business"].unique().tolist()
+INDUSTRY_OPTIONS = ["Accommodation & Food Services", "Administrative Services", "Construction",
+                     "Health Care", "Manufacturing", "Professional Services", "Real Estate",
+                     "Retail Trade", "Transportation & Warehousing", "Wholesale Trade"]
 
 st.title("Commercial UW Risk Intelligence")
 st.caption("Model-driven Loss Propensity scoring for commercial submissions")
@@ -56,6 +77,7 @@ st.sidebar.caption(
 # ============================================================================
 if mode == "Portfolio Overview":
     st.header("Portfolio Overview")
+    book = get_scored_book()
 
     c1, c2, c3 = st.columns(3)
     lob_filter = c1.selectbox("Line of Business", ["All"] + sorted(LOB_OPTIONS))
@@ -133,31 +155,45 @@ else:
     st.header("New Submission")
     st.caption("Enter the submission details below to generate a model-predicted risk score.")
 
+    lob = st.selectbox("Line of Business", sorted(LOB_OPTIONS))
+    group = group_for_lob(lob)
+    is_property = group == "property"
+    st.caption(
+        f"Showing **{'property/building' if is_property else 'business operations'}** inputs for "
+        f"{lob}. Fields greyed out below aren't part of this line's model - they don't move the "
+        f"score, so they're disabled rather than left active but silently ignored."
+    )
+
     with st.form("submission_form"):
         col1, col2, col3 = st.columns(3)
 
         with col1:
             st.markdown("**Property**")
-            lob = st.selectbox("Line of Business", sorted(LOB_OPTIONS))
-            construction_type = st.selectbox("Construction Type", CATEGORICAL_OPTIONS["construction_type"])
-            year_built = st.number_input("Year Built", 1900, 2026, 2000)
-            square_footage = st.number_input("Square Footage", 500, 500000, 5000)
-            total_insured_value_usd = st.number_input("Total Insured Value ($)", 50000, 50000000, 500000, step=10000)
-            sprinklered_flag = st.selectbox("Sprinklered", CATEGORICAL_OPTIONS["sprinklered_flag"])
-            fire_protection_class_iso_ppc = st.slider("Fire Protection Class (ISO PPC, 1=best)", 1, 10, 5)
+            construction_type = st.selectbox("Construction Type", CATEGORICAL_OPTIONS["construction_type"], disabled=not is_property)
+            year_built = st.number_input("Year Built", 1900, 2026, 2000, disabled=not is_property)
+            square_footage = st.number_input("Square Footage", 500, 500000, 5000, disabled=not is_property)
+            total_insured_value_usd = st.number_input("Total Insured Value ($)", 50000, 50000000, 500000, step=10000, disabled=not is_property)
+            sprinklered_flag = st.selectbox("Sprinklered", CATEGORICAL_OPTIONS["sprinklered_flag"], disabled=not is_property)
+            fire_protection_class_iso_ppc = st.slider("Fire Protection Class (ISO PPC, 1=best)", 1, 10, 5, disabled=not is_property)
+            roof_age_years = st.number_input("Roof Age (years)", 0, 120, 15, disabled=not is_property)
 
         with col2:
-            st.markdown("**Roof & Location Hazard**")
-            roof_age_years = st.number_input("Roof Age (years)", 0, 120, 15)
-            flood_zone_tier = st.selectbox("Flood Zone Tier", CATEGORICAL_OPTIONS["flood_zone_tier"])
-            fema_flood_zone_code = st.selectbox("FEMA Flood Zone Code", CATEGORICAL_OPTIONS["fema_flood_zone_code"])
-            earthquake_zone_tier = st.selectbox("Earthquake Zone Tier", CATEGORICAL_OPTIONS["earthquake_zone_tier"])
-            soil_liquefaction_class = st.selectbox("Soil Liquefaction Class", CATEGORICAL_OPTIONS["soil_liquefaction_class"])
-            wildfire_zone_tier = st.selectbox("Wildfire Zone Tier", CATEGORICAL_OPTIONS["wildfire_zone_tier"])
-            wind_zone_tier = st.selectbox("Wind Zone Tier", CATEGORICAL_OPTIONS["wind_zone_tier"])
-            distance_to_coast_miles = st.number_input("Distance to Coast (miles)", 0.0, 800.0, 60.0)
-            distance_to_fault_line_miles = st.number_input("Distance to Fault Line (miles)", 0.0, 400.0, 60.0)
-            distance_to_nearest_water_body_miles = st.number_input("Distance to Nearest Water Body (miles)", 0.0, 50.0, 3.0)
+            st.markdown("**Location Hazard**")
+            flood_zone_tier = st.selectbox("Flood Zone Tier", CATEGORICAL_OPTIONS["flood_zone_tier"], disabled=not is_property)
+            fema_flood_zone_code = st.selectbox("FEMA Flood Zone Code", CATEGORICAL_OPTIONS["fema_flood_zone_code"], disabled=not is_property)
+            earthquake_zone_tier = st.selectbox("Earthquake Zone Tier", CATEGORICAL_OPTIONS["earthquake_zone_tier"], disabled=not is_property)
+            soil_liquefaction_class = st.selectbox("Soil Liquefaction Class", CATEGORICAL_OPTIONS["soil_liquefaction_class"], disabled=not is_property)
+            wildfire_zone_tier = st.selectbox("Wildfire Zone Tier", CATEGORICAL_OPTIONS["wildfire_zone_tier"], disabled=not is_property)
+            wind_zone_tier = st.selectbox("Wind Zone Tier", CATEGORICAL_OPTIONS["wind_zone_tier"], disabled=not is_property)
+            distance_to_coast_miles = st.number_input("Distance to Coast (miles)", 0.0, 800.0, 60.0, disabled=not is_property)
+            distance_to_fault_line_miles = st.number_input("Distance to Fault Line (miles)", 0.0, 400.0, 60.0, disabled=not is_property)
+            distance_to_nearest_water_body_miles = st.number_input("Distance to Nearest Water Body (miles)", 0.0, 50.0, 3.0, disabled=not is_property)
+
+            st.markdown("**Business & Workforce**")
+            industry_class_naics = st.selectbox("Industry Class (NAICS)", INDUSTRY_OPTIONS, disabled=is_property)
+            number_of_employees = st.number_input("Number of Employees", 1, 20000, 25, disabled=is_property)
+            avg_wage_per_employee_usd = st.number_input("Avg. Wage per Employee ($)", 15000, 300000, 55000, step=1000, disabled=is_property)
+            avg_employee_age = st.number_input("Avg. Employee Age", 18, 70, 40, disabled=is_property)
 
         with col3:
             st.markdown("**Financial & History**")
@@ -167,14 +203,16 @@ else:
             prior_claim_count = st.number_input("Prior Claim Count", 0, 20, 0)
             prior_total_incurred_usd = st.number_input("Prior Total Incurred ($)", 0, 5000000, 0, step=1000)
             policy_term_months = st.selectbox("Policy Term (months)", [6, 12, 24, 36], index=1)
-            indicated_annual_premium_usd = st.number_input("Indicated Annual Premium ($)", 100, 2000000, 5000, step=100)
+            st.caption("Premium is calculated automatically from the inputs above (TIV-based "
+                       "for property, payroll-based for liability) once you submit - it isn't "
+                       "typed in, since a manually guessed premium was distorting every score.")
 
         submitted = st.form_submit_button("Score Submission", type="primary")
 
     if submitted:
         building_age_years = 2026 - year_built
         validation_errors = []
-        if roof_age_years > building_age_years:
+        if is_property and roof_age_years > building_age_years:
             validation_errors.append(
                 f"Roof Age ({roof_age_years} years) cannot exceed Building Age ({building_age_years} "
                 f"years, based on Year Built) - a roof cannot be older than the building it's on."
@@ -201,15 +239,21 @@ else:
             "distance_to_coast_miles": distance_to_coast_miles,
             "distance_to_fault_line_miles": distance_to_fault_line_miles,
             "distance_to_nearest_water_body_miles": distance_to_nearest_water_body_miles,
+            "industry_class_naics": industry_class_naics, "number_of_employees": number_of_employees,
+            "avg_wage_per_employee_usd": avg_wage_per_employee_usd, "avg_employee_age": avg_employee_age,
             "financial_stability_score": financial_stability_score, "safety_program_flag": safety_program_flag,
             "safety_inspection_findings": safety_inspection_findings, "prior_claim_count": prior_claim_count,
             "prior_total_incurred_usd": prior_total_incurred_usd, "policy_term_months": policy_term_months,
-            "indicated_annual_premium_usd": indicated_annual_premium_usd,
         }])
 
-        result = score(row, models).iloc[0]
+        try:
+            result = score(row, models).iloc[0]
+        except Exception as e:
+            st.error(f"Scoring failed: {e}")
+            st.stop()
 
         st.subheader("Result")
+        st.caption(f"Auto-calculated premium used for this score: ${result['indicated_annual_premium_usd']:,.0f}")
 
         gauge_col, metric_col = st.columns([1, 1])
         with gauge_col:

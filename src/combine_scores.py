@@ -43,5 +43,7 @@ calib["decile"] = pd.qcut(calib["v2"], 10, labels=False, duplicates="drop")
 print(calib.groupby("decile").agg(avg_v2=("v2", "mean"), avg_stored=("stored", "mean"),
                                     n=("v2", "size")).round(1).to_string())
 
+import os
+os.makedirs("../reports", exist_ok=True)
 df.to_excel("../reports/scored_book.xlsx", index=False)
 print("\nFull scored book saved to ../reports/scored_book.xlsx")
