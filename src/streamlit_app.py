@@ -19,7 +19,6 @@ st.set_page_config(page_title="Commercial UW Risk Intelligence", layout="wide", 
 LOGO_PATH = Path(__file__).resolve().parent.parent / "assets" / "vm_logo.png"
 if LOGO_PATH.exists():
     st.sidebar.image(str(LOGO_PATH), width=180)
-    st.sidebar.caption("Built at ValueMomentum")
 st.sidebar.markdown("---")
 
 # cache_resource: loaded once per server session, not on every widget interaction
