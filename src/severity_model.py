@@ -1,8 +1,8 @@
 """
-Severity model: predicts expected claim $ amount, GIVEN a claim happens, attritional only
-(large claims are handled separately in large_loss_model.py).
-Trains TWO separate models - property lines and liability lines - see lob_config.py.
-Gamma GLM baseline, GBM challenger. Saves both to ../models/severity_model.joblib
+Severity model: predicts expected claim $ amount, GIVEN a claim happens, attritional only.
+Trains two models (property/liability). Regularization, attritional-only split, and
+monotonic constraints all built in from the start.
+Saves to ../models/severity_model.joblib
 """
 import numpy as np
 import pandas as pd
@@ -12,26 +12,24 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from sklearn.metrics import mean_gamma_deviance, mean_absolute_error
+from sklearn.metrics import mean_absolute_error
 import joblib
 from data_loader import load_data
-from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, PROPERTY_FEATURES, LIABILITY_FEATURES
+from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, PROPERTY_FEATURES, LIABILITY_FEATURES, encode_ordinal_tiers
 
-# Known real-world direction for continuous/ordinal features - GBM has no built-in guarantee
-# that "better financial stability" always means "lower predicted severity" the way a GLM's
-# single coefficient does; checked this directly and found financial_stability_score bouncing
-# non-monotonically (28.2 -> 27.0 -> 30.8 -> 32.8 -> 30.0 -> 28.9 as it improved from 10 to 99).
-# +1 = higher value should push severity up, -1 = higher value should push severity down,
-# 0 = no enforced direction (genuinely ambiguous, e.g. employee count, TIV).
 MONOTONIC_DIRECTION = {
-    "financial_stability_score": -1, "prior_claim_count": 1, "prior_total_incurred_usd": 1,
-    "building_age_years": 1, "roof_age_years": 1, "distance_to_coast_miles": -1,
-    "distance_to_fault_line_miles": -1, "distance_to_nearest_water_body_miles": -1,
-    "fire_protection_class_iso_ppc": 1,
+    "financial_stability_score": -1, "claim_count_last_3_years": 1,
+    "large_loss_count_last_5_years": 1, "claims_free_years": -1,
+    "building_age_years": 1, "roof_age_years": 1, "fire_protection_class_iso_ppc": 1,
+    "distance_to_coast_miles": -1, "distance_to_fault_line_miles": -1,
+    "distance_to_nearest_water_body_miles": -1, "distance_to_fire_station_miles": 1,
+    "distance_to_fire_hydrant_miles": 1, "debt_to_equity_ratio": 1,
+    "flood_zone_tier": 1, "earthquake_zone_tier": 1, "wildfire_zone_tier": 1, "wind_zone_tier": 1,
 }
 
 df, schema, usable_for, output_cols = load_data()
 df["effective_date"] = pd.to_datetime(df["effective_date"])
+df = encode_ordinal_tiers(df)
 claims_all = df[df["claim_count_total"] > 0].copy()
 
 GROUPS = [("property", PROPERTY_LOBS, PROPERTY_FEATURES), ("liability", LIABILITY_LOBS, LIABILITY_FEATURES)]
@@ -42,12 +40,13 @@ for group_name, lobs, features in GROUPS:
     print(f"\n=== {group_name.upper()} ({', '.join(lobs)}) ===")
     claims = claims_all[claims_all["line_of_business"].isin(lobs)].copy()
 
-    # attritional only - exclude anything above the per-LOB 95th pct threshold (large_loss_model.py)
-    thresholds = claims.groupby("line_of_business")["claim_severity_avg_usd"].quantile(0.95)
-    claims["_thr"] = claims["line_of_business"].map(thresholds)
+    # attritional only, using this file's OWN peril-specific threshold (more sophisticated
+    # than a generic percentile rule - PML-based for property, AOA-based for liability,
+    # flat $75K for WC, policy-limit-based for auto, per the file's own documentation)
     n_before = len(claims)
-    claims = claims[claims["claim_severity_avg_usd"] <= claims["_thr"]].drop(columns="_thr")
-    print(f"Excluded {n_before - len(claims)} large claims, fitting on {len(claims):,} attritional claims")
+    claims = claims[claims["large_claim_flag"] == 0]
+    print(f"Excluded {n_before - len(claims)} large claims (file's own large_claim_flag), "
+          f"fitting on {len(claims):,} attritional claims")
 
     for lob in lobs:
         lob_avg_severity[lob] = claims[claims["line_of_business"] == lob]["claim_severity_avg_usd"].mean()
@@ -80,13 +79,10 @@ for group_name, lobs, features in GROUPS:
     glm.fit(Xtr, ytr, model__sample_weight=wtr)
     glm_pred = glm.predict(Xte)
     glm_mae = mean_absolute_error(yte, glm_pred)
-    print(f"GLM (Gamma) - MAE: ${glm_mae:,.0f}")
+    print(f"GLM (Gamma, alpha=5.0) - MAE: ${glm_mae:,.0f}")
 
-    # fit the preprocessor once first to get the REAL one-hot output width (raw nunique()
-    # would be wrong here - it doesn't account for the "Missing" category the imputer adds,
-    # or how OneHotEncoder actually expands each column)
-    pre.fit(Xtr)
-    n_cat_output_cols = len(pre.named_transformers_["cat"].named_steps["onehot"].get_feature_names_out(cat_cols))
+    pre_fitted = pre.fit(Xtr)
+    n_cat_output_cols = len(pre_fitted.named_transformers_["cat"].named_steps["onehot"].get_feature_names_out(cat_cols))
     monotonic_cst = [MONOTONIC_DIRECTION.get(c, 0) for c in num_cols] + [0] * n_cat_output_cols
 
     gbm = Pipeline([("prep", pre), ("model", HistGradientBoostingRegressor(
@@ -94,7 +90,7 @@ for group_name, lobs, features in GROUPS:
     gbm.fit(Xtr, ytr, model__sample_weight=wtr)
     gbm_pred = np.clip(gbm.predict(Xte), 1, None)
     gbm_mae = mean_absolute_error(yte, gbm_pred)
-    print(f"GBM - MAE: ${gbm_mae:,.0f}")
+    print(f"GBM (monotonic) - MAE: ${gbm_mae:,.0f}")
 
     best_model, best_name = (gbm, "gbm") if gbm_mae < glm_mae else (glm, "glm")
     print(f"Using {best_name}")
@@ -104,4 +100,3 @@ for group_name, lobs, features in GROUPS:
 saved["lob_avg_severity"] = lob_avg_severity
 joblib.dump(saved, "../models/severity_model.joblib")
 print("\nSaved both group models to ../models/severity_model.joblib")
-print("Per-LOB average attritional severity:", {k: round(v) for k, v in lob_avg_severity.items()})

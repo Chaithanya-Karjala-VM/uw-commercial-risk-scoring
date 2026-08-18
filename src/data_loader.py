@@ -1,18 +1,15 @@
 """
-Shared loader - reads schema from Data Dictionary tab, maps Sample Data columns by letter,
-returns a clean df + feature metadata. Every script in this project imports this instead of
-re-reading the Excel file its own way, so schema logic lives in exactly one place.
+Shared loader - reads schema from the Data Dictionary tab, maps Sample Data columns by
+letter, returns a clean df + feature metadata. Every script imports this instead of
+re-reading the Excel file its own way.
 """
 import re
 from pathlib import Path
 import pandas as pd
 from openpyxl.utils import column_index_from_string
 
-# resolved relative to THIS FILE's location, not the current working directory - so this
-# works whether you run "cd src && python data_audit.py" locally or Streamlit Cloud launches
-# the app from the repo root instead
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_FILE = str(PROJECT_ROOT / "data" / "Copy_of_UW_Risk_Score_Commercial_data.xlsx")
+DEFAULT_FILE = str(PROJECT_ROOT / "data" / "UW_Risk_Score_Commercial_F.xlsx")
 
 
 def load_data(path=DEFAULT_FILE):
@@ -44,6 +41,5 @@ def load_data(path=DEFAULT_FILE):
 
 
 def features_for(target, usable_for, output_cols, exclude=()):
-    """Candidate feature columns tagged for a given model target, outputs and IDs excluded."""
     return [n for n, u in usable_for.items()
             if isinstance(u, str) and target in u and n not in output_cols and n not in exclude]

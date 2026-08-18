@@ -1,9 +1,8 @@
 """
 Frequency model: predicts expected claim count per exposure-year.
-Trains TWO separate models - one for property lines (building/CAT features), one for
-liability lines (industry/workforce features) - see lob_config.py for why.
-Poisson GLM baseline per group, NB overdispersion check, GBM challenger.
-Saves both to ../models/frequency_model.joblib
+Trains two models (property/liability groups) - monotonic constraints and exposure
+weighting built in from the start this time, not discovered as bugs.
+Saves to ../models/frequency_model.joblib
 """
 import numpy as np
 import pandas as pd
@@ -17,20 +16,21 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_poisson_deviance
 import joblib
 from data_loader import load_data
-from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, PROPERTY_FEATURES, LIABILITY_FEATURES
+from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, PROPERTY_FEATURES, LIABILITY_FEATURES, encode_ordinal_tiers
 
-# same defensive monotonicity fix as severity_model.py, applied here too in case GBM ever
-# wins the frequency benchmark in a future retrain (GLM won this time, so this isn't
-# currently changing behavior, just protecting against it silently regressing later)
 MONOTONIC_DIRECTION = {
-    "financial_stability_score": -1, "prior_claim_count": 1, "prior_total_incurred_usd": 1,
-    "building_age_years": 1, "roof_age_years": 1, "distance_to_coast_miles": -1,
-    "distance_to_fault_line_miles": -1, "distance_to_nearest_water_body_miles": -1,
-    "fire_protection_class_iso_ppc": 1,
+    "financial_stability_score": -1, "claim_count_last_3_years": 1,
+    "large_loss_count_last_5_years": 1, "claims_free_years": -1,
+    "building_age_years": 1, "roof_age_years": 1, "fire_protection_class_iso_ppc": 1,
+    "distance_to_coast_miles": -1, "distance_to_fault_line_miles": -1,
+    "distance_to_nearest_water_body_miles": -1, "distance_to_fire_station_miles": 1,
+    "distance_to_fire_hydrant_miles": 1, "debt_to_equity_ratio": 1,
+    "flood_zone_tier": 1, "earthquake_zone_tier": 1, "wildfire_zone_tier": 1, "wind_zone_tier": 1,
 }
 
 df, schema, usable_for, output_cols = load_data()
 df["effective_date"] = pd.to_datetime(df["effective_date"])
+df = encode_ordinal_tiers(df)  # Low/Moderate/High/Severe -> 0-3, monotonic-constrainable
 
 GROUPS = [("property", PROPERTY_LOBS, PROPERTY_FEATURES), ("liability", LIABILITY_LOBS, LIABILITY_FEATURES)]
 saved = {}
