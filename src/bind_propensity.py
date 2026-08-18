@@ -1,10 +1,9 @@
 """
-Bind Propensity - NOT a trained statistical model. No genuine historical bind/no-bind
-outcome exists anywhere in the source data (checked directly - every bind-related score
-column is itself tagged as a derived output, not a real fact). This reconstructs the
-documented formula ("broker hit/bind, retention, diversity, profitability, deal friction")
-via regression against the file's own stored score, verified to R^2=0.927 / avg error 1.54
-points on a 0-100 scale before being trusted.
+Bind Propensity - rules-based, not trained. No historical bind/no-bind outcome exists in
+the source data; every bind-related score column is itself a derived output, not a fact.
+Reconstructs the documented formula (broker hit/bind, retention, diversity, profitability,
+deal friction) via regression against the file's own stored score.
+Verified: R^2=0.927, avg error 1.54 points on a 0-100 scale.
 """
 import numpy as np
 import pandas as pd
@@ -16,9 +15,8 @@ BIND_INGREDIENTS = [
     "competing_quotes_count", "submission_completeness_pct",
 ]
 
-# coefficients from the verified regression reconstruction (R^2=0.927 against the file's
-# own bind_propensity_score_0_100) - re-verify with verify_bind_formula() if the source
-# data ever changes, don't assume these stay correct forever
+# fitted via regression against bind_propensity_score_0_100 - rerun verify_bind_formula()
+# if the source data changes
 BIND_COEFFICIENTS = {
     "intercept": -251.768038,
     "broker_hit_bind_ratio_pct": 0.148436,
@@ -63,10 +61,5 @@ if __name__ == "__main__":
     computed = compute_bind_propensity(df)
     stored = df["bind_propensity_score_0_100"]
     diff = (computed - stored).abs()
-    print(f"\nUsing the fixed BIND_COEFFICIENTS above: avg diff vs stored = {diff.mean():.2f} points, "
+    print(f"Fixed coefficients vs stored: avg diff = {diff.mean():.2f} points, "
           f"{(diff < 3).mean()*100:.1f}% of rows within 3 points")
-
-    print("\nExample - Platinum broker, strong hit/bind history, few competing quotes:")
-    print(f"  {compute_bind_propensity(pd.DataFrame([{c: v for c, v in zip(BIND_INGREDIENTS, [65, 97, 6, 8, 70, 12, 1, 95])}])).iloc[0]}")
-    print("Example - Bronze broker, weak hit/bind history, many competing quotes:")
-    print(f"  {compute_bind_propensity(pd.DataFrame([{c: v for c, v in zip(BIND_INGREDIENTS, [25, 88, 1, 1, 30, 45, 6, 70])}])).iloc[0]}")

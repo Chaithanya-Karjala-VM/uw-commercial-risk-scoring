@@ -14,10 +14,10 @@ df["effective_date"] = pd.to_datetime(df["effective_date"])
 models = load_models()
 df = score(df, models)
 
-print(f"Simple average of individual predicted loss ratios: {df['predicted_loss_ratio_pct'].mean():.1f}% "
-      f"- not trustworthy on its own, small-premium noise can dominate a plain average.")
+simple_avg = df["predicted_loss_ratio_pct"].mean()
 portfolio_lr = df["total_expected_loss_cost"].sum() / df["indicated_annual_premium_usd"].sum() * 100
-print(f"Portfolio loss ratio (total expected cost / total premium): {portfolio_lr:.1f}% - the trustworthy number.")
+print(f"Simple average loss ratio: {simple_avg:.1f}% (not weighted - use portfolio figure below)")
+print(f"Portfolio loss ratio (premium-weighted): {portfolio_lr:.1f}%")
 
 by_lob = df.groupby("line_of_business").apply(
     lambda g: g["total_expected_loss_cost"].sum() / g["indicated_annual_premium_usd"].sum() * 100,
@@ -28,8 +28,7 @@ print(by_lob.round(1).to_string())
 
 stored = df["loss_propensity_score_0_100"]
 v2 = df["loss_propensity_score_v2"]
-print(f"\nAgainst the file's own stored Loss Propensity Score: correlation {v2.corr(stored):.3f}, "
-      f"average difference {(v2-stored).abs().mean():.1f} points")
+print(f"\nvs. stored score: correlation {v2.corr(stored):.3f}, avg diff {(v2-stored).abs().mean():.1f} points")
 
 print("\nLoss Propensity Score v2 - distribution:")
 print(v2.describe().round(1).to_string())

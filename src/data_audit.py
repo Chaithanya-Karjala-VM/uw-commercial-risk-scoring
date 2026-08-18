@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from data_loader import load_data
+from lob_config import PROPERTY_LOBS
 
 INPUT_FILE = sys.argv[1] if len(sys.argv) > 1 else None
 OUTPUT_REPORT = "../reports/data_audit_report.md"
@@ -64,27 +65,24 @@ n = (df["aoy_limit_usd"] < df["aoa_limit_usd"] - 1).sum()
 w(f"AOY < AOA violations: {n:,}")
 if n: issues.append("AOY below AOA on some rows")
 
-h("4. Claims-history leakage check (specifically re-verified for this file)")
+h("4. Claims-history leakage check")
 has_claim = df[df["claim_count_total"] > 0]
 pct_positive = (has_claim["claims_free_years"] > 0).mean() * 100
-w(f"claims_free_years: {pct_positive:.1f}% of rows WITH a current claim show a positive "
-  f"value (0% would mean leakage - it would be perfectly circular with the outcome). "
-  f"{'PASS - genuinely backward-looking.' if pct_positive > 10 else 'FAIL - looks like leakage.'}")
+w(f"claims_free_years positive rate among rows with a current claim: {pct_positive:.1f}% "
+  f"({'PASS' if pct_positive > 10 else 'FAIL'} - 0% would indicate leakage)")
 if pct_positive <= 10:
     issues.append("claims_free_years still looks like leakage")
 
 corr_3yr = df["claim_count_last_3_years"].corr(df["claim_count_total"])
-w(f"corr(claim_count_last_3_years, claim_count_total) = {corr_3yr:.3f} - real signal if "
-  f"positive and well below 1.0 (near 1.0 would suggest the two aren't independently sourced).")
+w(f"corr(claim_count_last_3_years, claim_count_total) = {corr_3yr:.3f}")
 
-h("5. Construction type vs. building age (previously flat/random, checked again)")
+h("5. Construction type vs. building age")
 w(df.groupby("construction_type")["building_age_years"].mean().round(1).to_string())
 
-h("6. Renewal vs. New Business - does claim frequency actually differ")
+h("6. Renewal vs. New Business claim frequency")
 w(df.groupby("renewal_flag")["claim_count_total"].mean().round(3).to_string())
 
 h("7. Premium bands by group (property on TIV, liability on payroll)")
-from lob_config import PROPERTY_LOBS
 prop = df[df["line_of_business"].isin(PROPERTY_LOBS)]
 liab = df[~df["line_of_business"].isin(PROPERTY_LOBS)]
 w("Property lines, premium as % of TIV:")

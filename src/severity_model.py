@@ -40,13 +40,11 @@ for group_name, lobs, features in GROUPS:
     print(f"\n=== {group_name.upper()} ({', '.join(lobs)}) ===")
     claims = claims_all[claims_all["line_of_business"].isin(lobs)].copy()
 
-    # attritional only, using this file's OWN peril-specific threshold (more sophisticated
-    # than a generic percentile rule - PML-based for property, AOA-based for liability,
-    # flat $75K for WC, policy-limit-based for auto, per the file's own documentation)
+    # attritional only - large claims are handled separately, using this file's own
+    # peril-specific threshold rather than a generic percentile rule
     n_before = len(claims)
     claims = claims[claims["large_claim_flag"] == 0]
-    print(f"Excluded {n_before - len(claims)} large claims (file's own large_claim_flag), "
-          f"fitting on {len(claims):,} attritional claims")
+    print(f"Excluded {n_before - len(claims)} large claims, fitting on {len(claims):,} attritional claims")
 
     for lob in lobs:
         lob_avg_severity[lob] = claims[claims["line_of_business"] == lob]["claim_severity_avg_usd"].mean()

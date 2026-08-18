@@ -1,13 +1,10 @@
 """
 Large-loss model, two parts, trained separately for property and liability lines.
-Uses this file's OWN large_claim_flag/threshold (peril-specific: PML-based for property,
-AOA-based for liability, flat $75K for WC, policy-limit-based for auto) rather than
-re-deriving a generic percentile rule - this file's own definition is more sophisticated
-than what we built ourselves last time.
+Uses this file's own large_claim_flag/threshold (peril-specific: PML-based for property,
+AOA-based for liability, flat $75K for WC, policy-limit-based for auto) rather than a
+generic percentile rule.
 Part A: probability of a large loss (logistic + GBM, whole book).
 Part B: severity given large - Generalized Pareto, pooled per group.
-No class_weight="balanced" (confirmed last time this distorts probabilities needed for
-real expected-cost math).
 Saves to ../models/large_loss_model.joblib
 """
 import numpy as np
@@ -38,11 +35,10 @@ df, schema, usable_for, output_cols = load_data()
 df["effective_date"] = pd.to_datetime(df["effective_date"])
 df = encode_ordinal_tiers(df)
 
-# thresholds straight from the file's own peril-specific logic, per LOB (median of the
-# file's own large_claim_threshold_usd within each line, since it varies by peril inputs)
+# per-LOB threshold: median of the file's own peril-specific large_claim_threshold_usd
 claims_all = df[df["claim_count_total"] > 0]
 thresholds = claims_all.groupby("line_of_business")["large_claim_threshold_usd"].median()
-print("Per-LOB large-claim threshold (median of the file's own peril-specific value):")
+print("Per-LOB large-claim threshold:")
 print(thresholds.round(0).to_string())
 
 GROUPS = [("property", PROPERTY_LOBS, PROPERTY_FEATURES), ("liability", LIABILITY_LOBS, LIABILITY_FEATURES)]
@@ -77,24 +73,16 @@ for group_name, lobs, features in GROUPS:
     logit = Pipeline([("prep", pre), ("model", LogisticRegression(max_iter=2000))])
     logit.fit(Xtr, ytr)
 
-    # Consistency check: a fitted coefficient that contradicts a KNOWN real-world direction
-    # (the same MONOTONIC_DIRECTION list used for the GBM constraints) is a red flag on a
-    # thin positive-class sample like this one (only ~120-180 large-claim rows across 14-33
-    # predictors) - found exactly this on property: financial_stability_score fit at +0.10
-    # (better stability -> HIGHER large-loss probability) despite a raw correlation of only
-    # -0.003, essentially zero. Regularization sweep (C=1.0 down to 0.01) shrank it but never
-    # flipped the sign, while degrading AUC in the process - so instead of forcing a sign or
-    # accepting a wrong-direction driver, the offending feature is dropped from THIS specific
-    # sub-model and it's refit, rather than either silently keeping a spurious driver or
-    # discarding features that are behaving correctly in the frequency/severity models.
+    # Drop any feature whose fitted coefficient contradicts its known real-world direction -
+    # on a thin positive-class sample (~120-180 large-claim rows), a wrong-signed coefficient
+    # is noise, not signal, and refitting without it is safer than keeping a spurious driver.
     ohe_check = logit.named_steps["prep"].named_transformers_["cat"].named_steps["onehot"]
     feat_names_check = num_cols + list(ohe_check.get_feature_names_out(cat_cols))
     coefs_check = pd.Series(logit.named_steps["model"].coef_.ravel(), index=feat_names_check)
     contradicting = [f for f, d in MONOTONIC_DIRECTION.items()
                       if f in coefs_check.index and np.sign(coefs_check[f]) not in (0, d)]
     if contradicting:
-        print(f"Dropping from occurrence model - coefficient contradicts known real-world "
-              f"direction (likely a thin-sample artifact, not real signal): {contradicting}")
+        print(f"Dropping (contradicts known direction): {contradicting}")
         features_retry = [f for f in features if f not in contradicting]
         num_cols = [c for c in num_cols if c not in contradicting]
         cat_cols = [c for c in cat_cols if c not in contradicting]

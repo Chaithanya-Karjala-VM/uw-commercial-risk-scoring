@@ -1,27 +1,17 @@
 """
 Appetite/Capacity - rules-based, not trained (same reasoning as bind_propensity.py: no
-genuine historical outcome exists to train against, this is a company policy decision with
-a known structure, not a pattern to learn).
+historical outcome exists to train against, this is a policy decision with a known
+structure, not a pattern to learn).
 
-The hard-rule veto below has a CONFIRMED, EXACT component and a HONEST LIMITATION:
-  - Confirmed exact: whenever any of the 4 named flags (sanctions, insolvency, restricted
-    ops, region x LOB) is True, pass rate is 0% with zero exceptions across all 20,000 rows.
-    This is a real, verified NECESSARY condition.
-  - Limitation, found by testing: it is NOT SUFFICIENT. Among the 17,514 rows where all 4
-    flags are clear, only 70.4% actually pass - some other factor also gates roughly 30% of
-    otherwise-clean submissions. Checked TIV thresholds (no relationship - pass/fail groups
-    have nearly identical average TIV), checked Line of Business (only mild 68-76% variation,
-    not a hard cutoff), checked CAT zone combinations - none produced a clean deterministic
-    rule. This may be a probabilistic component in how the file was generated, or a
-    combination not isolated despite reasonable effort. NOT claimed as solved - flagged
-    honestly as an open item, best resolved by asking the source data owner directly what
-    the exact rule is, since it's a real company policy that should have one.
+Hard-rule veto: the 4 named flags (sanctions, insolvency, restricted ops, region x LOB) are
+a confirmed, exact NECESSARY condition - any one True means 0% pass, verified with zero
+exceptions across all 20,000 rows. They are NOT sufficient - among rows where all 4 are
+clear, only 70.4% actually pass. Tested TIV thresholds, Line of Business, and CAT zone
+combinations as possible explanations; none produced a clean deterministic rule. Open item,
+not resolved - see project notes.
 
-The CAT-zone + TIV interaction mentioned in the file's own description ("CAT/TIV combo") is
-NOT a clean deterministic cutoff once all three CAT perils are checked together - tested
-multiple TIV thresholds, no hard boundary found, only a modest, non-absolute reduction in
-pass rate. This is approximated as a soft penalty on the fit score rather than a hard veto -
-flagged explicitly as an approximation, not claimed as exact the way the 4-flag veto is.
+The CAT-zone + TIV interaction is approximated as a soft penalty on the fit score, not a
+hard veto, for the same reason - no clean threshold found despite testing.
 
 Concentration cap is confirmed to be a flat 15% for every industry (checked directly - zero
 variation across all 10 industry classes), not a per-industry lookup table.
