@@ -8,6 +8,16 @@ import pandas as pd
 from scipy import stats
 import joblib
 from lob_config import group_for_lob, encode_ordinal_tiers
+from bind_propensity import compute_bind_propensity
+from appetite_capacity import compute_appetite_capacity_score, hard_rule_pass
+
+# fitted appetite coefficients - see appetite_capacity.verify_appetite_formula() docstring
+# for how these were derived and re-verify if the source data changes
+APPETITE_FIT_COEFFICIENTS = {
+    "intercept": -45.992, "appetite_hard_rule_pass_flag": 56.5351,
+    "target_growth_segment_flag": 9.1773, "financial_stability_score": 0.1807,
+    "broker_tier_num": 2.3957, "submission_completeness_pct": 0.3138,
+}
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = str(PROJECT_ROOT / "models")
@@ -116,5 +126,12 @@ def score(df, models, term_col="policy_term_months"):
         out.loc[mask, "indicated_annual_premium_usd"] = premium.round(0)
         out.loc[mask, "predicted_loss_ratio_pct"] = predicted_loss_ratio_pct.round(1)
         out.loc[mask, "loss_propensity_score_v2"] = loss_propensity_score
+
+    out["bind_propensity_score_v2"] = compute_bind_propensity(out)
+    out["appetite_capacity_score_v2"] = compute_appetite_capacity_score(out, APPETITE_FIT_COEFFICIENTS)
+    out["uw_score_v2"] = np.round(
+        0.30 * out["appetite_capacity_score_v2"] + 0.20 * out["bind_propensity_score_v2"]
+        + 0.50 * (100 - out["loss_propensity_score_v2"]), 1
+    )
 
     return out.drop(columns=["_group"])

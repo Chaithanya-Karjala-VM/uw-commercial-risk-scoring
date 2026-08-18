@@ -1,0 +1,72 @@
+"""
+Bind Propensity - NOT a trained statistical model. No genuine historical bind/no-bind
+outcome exists anywhere in the source data (checked directly - every bind-related score
+column is itself tagged as a derived output, not a real fact). This reconstructs the
+documented formula ("broker hit/bind, retention, diversity, profitability, deal friction")
+via regression against the file's own stored score, verified to R^2=0.927 / avg error 1.54
+points on a 0-100 scale before being trusted.
+"""
+import numpy as np
+import pandas as pd
+
+BIND_INGREDIENTS = [
+    "broker_hit_bind_ratio_pct", "broker_renewal_retention_pct",
+    "broker_product_diversity_count", "broker_geo_diversity_count",
+    "broker_profitability_score_0_100", "quote_to_bind_days",
+    "competing_quotes_count", "submission_completeness_pct",
+]
+
+# coefficients from the verified regression reconstruction (R^2=0.927 against the file's
+# own bind_propensity_score_0_100) - re-verify with verify_bind_formula() if the source
+# data ever changes, don't assume these stay correct forever
+BIND_COEFFICIENTS = {
+    "intercept": -251.768038,
+    "broker_hit_bind_ratio_pct": 0.148436,
+    "broker_renewal_retention_pct": 2.966184,
+    "broker_product_diversity_count": 0.919368,
+    "broker_geo_diversity_count": 0.288419,
+    "broker_profitability_score_0_100": 0.177814,
+    "quote_to_bind_days": -0.100091,
+    "competing_quotes_count": -2.001480,
+    "submission_completeness_pct": 0.001832,
+}
+
+
+def compute_bind_propensity(df):
+    score = pd.Series(BIND_COEFFICIENTS["intercept"], index=df.index)
+    for field in BIND_INGREDIENTS:
+        score = score + df[field].fillna(0) * BIND_COEFFICIENTS[field]
+    return score.clip(0, 100).round(1)
+
+
+def verify_bind_formula(df):
+    """Re-fits the regression fresh and reports fit quality - run this any time the source
+    data changes to confirm the coefficients above are still accurate."""
+    from sklearn.linear_model import LinearRegression
+    X = df[BIND_INGREDIENTS].fillna(0)
+    y = df["bind_propensity_score_0_100"]
+    reg = LinearRegression().fit(X, y)
+    pred = reg.predict(X)
+    r2 = reg.score(X, y)
+    mae = np.abs(pred - y).mean()
+    return {"r2": r2, "mae": mae, "intercept": reg.intercept_,
+            "coefficients": dict(zip(BIND_INGREDIENTS, reg.coef_))}
+
+
+if __name__ == "__main__":
+    from data_loader import load_data
+    df, schema, usable_for, output_cols = load_data()
+
+    fit = verify_bind_formula(df)
+    print(f"Fresh regression check: R^2={fit['r2']:.3f}, avg error={fit['mae']:.2f} points")
+
+    computed = compute_bind_propensity(df)
+    stored = df["bind_propensity_score_0_100"]
+    diff = (computed - stored).abs()
+    print(f"\nUsing the fixed BIND_COEFFICIENTS above: avg diff vs stored = {diff.mean():.2f} points, "
+          f"{(diff < 3).mean()*100:.1f}% of rows within 3 points")
+
+    print("\nExample - Platinum broker, strong hit/bind history, few competing quotes:")
+    print(f"  {compute_bind_propensity(pd.DataFrame([{c: v for c, v in zip(BIND_INGREDIENTS, [65, 97, 6, 8, 70, 12, 1, 95])}])).iloc[0]}")
+    print("Example - Bronze broker, weak hit/bind history, many competing quotes:")
+    print(f"  {compute_bind_propensity(pd.DataFrame([{c: v for c, v in zip(BIND_INGREDIENTS, [25, 88, 1, 1, 30, 45, 6, 70])}])).iloc[0]}")

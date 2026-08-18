@@ -1,6 +1,6 @@
 """
 Commercial UW Risk Intelligence - Streamlit app.
-Three views: Executive Dashboard, Portfolio Overview, New Submission.
+Three views: Executive Dashboard, Portfolio Overview, Submission.
 Run: streamlit run streamlit_app.py
 """
 from pathlib import Path
@@ -91,12 +91,14 @@ LOB_OPTIONS = sorted(raw_book["line_of_business"].unique().tolist())
 
 st.title("Commercial UW Risk Intelligence")
 st.caption("Model-driven Loss Propensity scoring for commercial submissions")
-mode = st.sidebar.radio("View", ["Executive Dashboard", "Portfolio Overview", "New Submission"])
+mode = st.sidebar.radio("View", ["Portfolio Overview", "Executive Dashboard", "Submission"])
 st.sidebar.markdown("---")
 st.sidebar.caption(
-    "**Model scope:** Loss Propensity only (frequency, severity, large-loss models). "
-    "Bind Propensity and Appetite/Capacity aren't trained yet - broker/appetite filters "
-    "below are for exploring the book, not part of the score."
+    "**Model scope:** Loss Propensity is a trained model (frequency, severity, large-loss). "
+    "Bind Propensity and Appetite/Capacity are rules-based, reconstructed from documented "
+    "logic and verified against the source file - not trained, since no real historical "
+    "bind/decline outcome exists to train against. One known gap: the Appetite hard-rule "
+    "gate matches on 4 of an unknown number of factors - see the project notes."
 )
 
 TIER_COLORS = {"Preferred": GOOD, "Standard": "#5D8AA8", "High": WARN, "Decline": BAD}
@@ -142,7 +144,7 @@ if mode == "Executive Dashboard":
             tier_counts = fb["loss_only_tier_v2"].value_counts().reindex(["Preferred", "Standard", "High", "Decline"]).fillna(0)
             fig = px.pie(names=tier_counts.index, values=tier_counts.values, hole=0.45,
                          color=tier_counts.index, color_discrete_map=TIER_COLORS,
-                         title="Loss-Only Tier Distribution (Filtered)")
+                         title="Loss-Only Tier Distribution")
             fig.update_traces(textinfo="percent+label")
             fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
@@ -150,7 +152,7 @@ if mode == "Executive Dashboard":
             renewal_counts = fb["renewal_flag"].value_counts()
             fig = px.pie(names=renewal_counts.index, values=renewal_counts.values, hole=0.45,
                          color_discrete_sequence=[NAVY, "#8FA8C9"],
-                         title="Renewal vs. New Business Mix (Filtered)")
+                         title="Renewal vs. New Business Mix")
             fig.update_traces(textinfo="percent+label")
             fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
@@ -163,7 +165,7 @@ if mode == "Executive Dashboard":
             ).sort_values()
             fig = px.bar(x=lr_by_lob.values, y=lr_by_lob.index, orientation="h",
                          color=lr_by_lob.values, color_continuous_scale=[GOOD, WARN, BAD],
-                         title="Avg Loss Ratio (Predicted) by LOB (Filtered)",
+                         title="Avg Loss Ratio (Predicted) by LOB",
                          labels={"x": "Loss Ratio (%)", "y": ""})
             fig.update_traces(texttemplate="%{x:.1f}%", textposition="outside")
             fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), coloraxis_showscale=False)
@@ -171,7 +173,7 @@ if mode == "Executive Dashboard":
         with c4:
             ct = fb.groupby(["line_of_business", "loss_only_tier_v2"], observed=True).size().reset_index(name="count")
             fig = px.bar(ct, x="count", y="line_of_business", color="loss_only_tier_v2", orientation="h",
-                         color_discrete_map=TIER_COLORS, title="Submission Count by LOB x Tier (Filtered)",
+                         color_discrete_map=TIER_COLORS, title="Submission Count by LOB x Tier",
                          labels={"count": "Submissions", "line_of_business": "", "loss_only_tier_v2": "Tier"})
             fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), legend_title="")
             st.plotly_chart(fig, use_container_width=True)
@@ -181,7 +183,7 @@ if mode == "Executive Dashboard":
             tiv_region = fb.groupby("risk_location_region")["total_insured_value_usd"].sum().sort_values() / 1e6
             fig = px.bar(x=tiv_region.values, y=tiv_region.index, orientation="h",
                          color_discrete_sequence=[ACCENT],
-                         title="Total TIV by Risk Region, $M (Filtered)", labels={"x": "TIV ($M)", "y": ""})
+                         title="Total TIV by Risk Region, $M", labels={"x": "TIV ($M)", "y": ""})
             fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10))
             st.plotly_chart(fig, use_container_width=True)
         with c6:
@@ -189,12 +191,40 @@ if mode == "Executive Dashboard":
                 ["Preferred", "Standard", "High", "Decline"]).fillna(0)
             fig = px.bar(x=large_by_tier.index, y=large_by_tier.values,
                          color=large_by_tier.index, color_discrete_map=TIER_COLORS,
-                         title="Large-Loss Count by Tier (Filtered)", labels={"x": "", "y": "Large-Loss Count"})
+                         title="Large-Loss Count by Tier", labels={"x": "", "y": "Large-Loss Count"})
             fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
 
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-        st.subheader("Claims Overview (Filtered)")
+        c7, c8 = st.columns(2)
+        with c7:
+            score_by_tier = fb.groupby("loss_only_tier_v2", observed=True).agg(
+                Loss=("loss_propensity_score_v2", "mean"),
+                Bind=("bind_propensity_score_v2", "mean"),
+                Appetite=("appetite_capacity_score_v2", "mean"),
+            ).reindex(["Preferred", "Standard", "High", "Decline"]).reset_index()
+            score_by_tier_long = score_by_tier.melt(id_vars="loss_only_tier_v2", var_name="Score Type", value_name="Avg Score")
+            fig = px.bar(score_by_tier_long, x="loss_only_tier_v2", y="Avg Score", color="Score Type",
+                         barmode="group", title="Avg Loss / Bind / Appetite Score by Tier",
+                         color_discrete_sequence=[BAD, ACCENT, GOOD], labels={"loss_only_tier_v2": ""})
+            fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), legend_title="")
+            st.plotly_chart(fig, use_container_width=True)
+        with c8:
+            bind_by_broker = fb.groupby("broker_tier")["bind_propensity_score_v2"].mean().reindex(
+                ["Platinum", "Gold", "Silver", "Bronze"]).dropna()
+            fig = px.bar(x=bind_by_broker.index, y=bind_by_broker.values, color_discrete_sequence=[ACCENT],
+                         title="Avg Bind Propensity by Broker Tier", labels={"x": "", "y": "Avg Bind Propensity"})
+            fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+
+        bind_by_size = fb.groupby("broker_size_class")["bind_propensity_score_v2"].mean().sort_values()
+        fig = px.bar(x=bind_by_size.values, y=bind_by_size.index, orientation="h", color_discrete_sequence=[ACCENT],
+                     title="Avg Bind Propensity by Broker Size", labels={"x": "Avg Bind Propensity", "y": ""})
+        fig.update_layout(height=280, margin=dict(l=10, r=10, t=50, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        st.subheader("Claims Overview")
         has_claim = fb[fb["claim_count_total"] > 0]
         c1, c2, c3, c4, c5, c6 = st.columns(6)
         c1.metric("Submissions w/ Claim", f"{len(has_claim):,}")
@@ -291,8 +321,9 @@ elif mode == "Portfolio Overview":
 
 # ============================================================================
 else:
-    st.header("New Submission")
-    st.caption("Enter the submission details below to generate a model-predicted risk score.")
+    st.header("Submission")
+    st.caption("Enter the submission details below to generate a model-predicted risk score - "
+               "applies to any submission received, new business or renewal alike.")
 
     lob = st.selectbox("Line of Business", LOB_OPTIONS)
     group = group_for_lob(lob)
@@ -303,7 +334,7 @@ else:
     )
 
     with st.form("submission_form"):
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             st.markdown("**Property**")
@@ -357,6 +388,30 @@ else:
             policy_term_months = st.selectbox("Policy Term (months)", [6, 12, 24, 36], index=1)
             st.caption("Premium is calculated automatically from the inputs above - not typed in.")
 
+        with col4:
+            st.markdown("**Broker**")
+            broker_tier = st.selectbox("Broker Tier", ["Platinum", "Gold", "Silver", "Bronze"])
+            broker_hit_bind_ratio_pct = st.slider("Broker Hit/Bind Ratio (%)", 0, 100, 40)
+            broker_renewal_retention_pct = st.slider("Broker Renewal Retention (%)", 0, 100, 92)
+            broker_product_diversity_count = st.number_input("Broker Product Diversity (count)", 0, 15, 3)
+            broker_geo_diversity_count = st.number_input("Broker Geo Diversity (count)", 0, 15, 3)
+            broker_profitability_score_0_100 = st.slider("Broker Profitability Score", 0, 100, 45)
+            quote_to_bind_days = st.number_input("Quote-to-Bind Days", 0, 120, 20)
+            competing_quotes_count = st.number_input("Competing Quotes Count", 0, 10, 2)
+            submission_completeness_pct = st.slider("Submission Completeness (%)", 0, 100, 85)
+
+            st.markdown("**Compliance & Appetite**")
+            sanctions_flag = st.selectbox("Sanctions/OFAC Watchlist Hit", ["No", "Yes"]) == "Yes"
+            insolvency_flag = st.selectbox("Prior Insolvency/Bankruptcy", ["No", "Yes"]) == "Yes"
+            restricted_ops_flag = st.selectbox("Restricted Operations", ["No", "Yes"]) == "Yes"
+            region_lob_restricted_flag = st.selectbox("Region x LOB Restricted", ["No", "Yes"]) == "Yes"
+            target_growth_segment_flag = st.selectbox("Target Growth Segment", ["No", "Yes"]) == "Yes"
+            st.caption(
+                "Known gap: the Appetite hard-rule gate below matches on 4 of an unknown "
+                "number of real factors - see project notes. Some submissions this shows "
+                "as passing may actually fail the full company rule."
+            )
+
         submitted = st.form_submit_button("Score Submission", type="primary")
 
     if submitted:
@@ -403,6 +458,18 @@ else:
             "safety_inspection_findings": safety_inspection_findings,
             "business_tenure_years": business_tenure_years, "revenue_growth_trend_pct": revenue_growth_trend_pct,
             "debt_to_equity_ratio": debt_to_equity_ratio, "policy_term_months": policy_term_months,
+            "broker_tier": broker_tier, "broker_hit_bind_ratio_pct": broker_hit_bind_ratio_pct,
+            "broker_renewal_retention_pct": broker_renewal_retention_pct,
+            "broker_product_diversity_count": broker_product_diversity_count,
+            "broker_geo_diversity_count": broker_geo_diversity_count,
+            "broker_profitability_score_0_100": broker_profitability_score_0_100,
+            "quote_to_bind_days": quote_to_bind_days, "competing_quotes_count": competing_quotes_count,
+            "submission_completeness_pct": submission_completeness_pct,
+            "sanctions_ofac_watchlist_flag": int(sanctions_flag),
+            "prior_insolvency_bankruptcy_flag": int(insolvency_flag),
+            "restricted_operations_flag": int(restricted_ops_flag),
+            "region_lob_restricted_flag": int(region_lob_restricted_flag),
+            "target_growth_segment_flag": int(target_growth_segment_flag),
         }])
 
         try:
@@ -414,34 +481,34 @@ else:
         st.subheader("Result")
         st.caption(f"Auto-calculated premium used for this score: ${result['indicated_annual_premium_usd']:,.0f}")
 
-        gauge_col, metric_col = st.columns([1, 1])
-        with gauge_col:
-            score_val = result["loss_propensity_score_v2"]
-            gauge_color = GOOD if score_val < 30 else (WARN if score_val < 60 else BAD)
-            fig_gauge = go.Figure(go.Indicator(
-                mode="gauge+number", value=score_val, number={"font": {"size": 34}},
-                gauge={
-                    "axis": {"range": [0, 100], "tickwidth": 1},
-                    "bar": {"color": gauge_color, "thickness": 0.35},
-                    "steps": [
-                        {"range": [0, 30], "color": "#eafaf1"},
-                        {"range": [30, 60], "color": "#fef9e7"},
-                        {"range": [60, 100], "color": "#fdedec"},
-                    ],
-                    "threshold": {"line": {"color": gauge_color, "width": 4}, "thickness": 0.9, "value": score_val},
-                },
-                title={"text": "Loss Propensity Score (0=best, 100=worst)", "font": {"size": 15}},
+        def mini_gauge(value, title, good_dir_low=True):
+            if good_dir_low:
+                color = GOOD if value < 30 else (WARN if value < 60 else BAD)
+            else:
+                color = BAD if value < 30 else (WARN if value < 60 else GOOD)
+            fig = go.Figure(go.Indicator(
+                mode="gauge+number", value=value, number={"font": {"size": 26}},
+                gauge={"axis": {"range": [0, 100], "tickwidth": 1}, "bar": {"color": color, "thickness": 0.35}},
+                title={"text": title, "font": {"size": 13}},
             ))
-            fig_gauge.update_layout(height=240, margin=dict(l=20, r=20, t=50, b=10))
-            st.plotly_chart(fig_gauge, use_container_width=True)
+            fig.update_layout(height=190, margin=dict(l=15, r=15, t=40, b=5))
+            return fig
 
-        with metric_col:
-            st.metric("Predicted Loss Ratio", f"{result['predicted_loss_ratio_pct']:.1f}%")
-            st.metric("Predicted Probability of Large Loss", f"{result['p_large_loss']*100:.1f}%")
+        g1, g2, g3, g4 = st.columns(4)
+        g1.plotly_chart(mini_gauge(result["loss_propensity_score_v2"], "Loss Propensity (0=best)"), use_container_width=True)
+        g2.plotly_chart(mini_gauge(result["bind_propensity_score_v2"], "Bind Propensity (100=best)", good_dir_low=False), use_container_width=True)
+        g3.plotly_chart(mini_gauge(result["appetite_capacity_score_v2"], "Appetite/Capacity (100=best)", good_dir_low=False), use_container_width=True)
+        g4.plotly_chart(mini_gauge(result["uw_score_v2"], "Final UW Score (100=best)", good_dir_low=False), use_container_width=True)
 
-        if result["loss_propensity_score_v2"] < 30:
-            st.success("Preferred risk under this model.")
-        elif result["loss_propensity_score_v2"] < 60:
-            st.warning("Standard risk under this model.")
+        m1, m2 = st.columns(2)
+        m1.metric("Predicted Loss Ratio", f"{result['predicted_loss_ratio_pct']:.1f}%")
+        m2.metric("Predicted Probability of Large Loss", f"{result['p_large_loss']*100:.1f}%")
+
+        if result["appetite_capacity_score_v2"] == 0:
+            st.error("Outside Appetite - hard-rule gate failed (sanctions, insolvency, restricted operations, or region/LOB restriction). Decline regardless of loss or bind scores.")
+        elif result["uw_score_v2"] >= 65:
+            st.success("High-priority submission under this model - good risk, in appetite, likely to bind.")
+        elif result["uw_score_v2"] >= 45:
+            st.warning("Standard priority under this model.")
         else:
-            st.error("High risk under this model - review recommended.")
+            st.error("Low priority under this model - review recommended.")
