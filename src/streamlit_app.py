@@ -16,13 +16,22 @@ from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, group_for_lob
 st.set_page_config(page_title="Commercial UW Risk Intelligence", layout="wide")
 
 # ---------------------------------------------------------------------------
-# Palette, fonts, KPI card styling
+# Palette, fonts, KPI card styling - built to react to the active theme (dark
+# by default per .streamlit/config.toml, switchable to light from Settings)
+# rather than hardcoded to one mode.
 # ---------------------------------------------------------------------------
-NAVY = "#1F3864"
-ACCENT = "#2E5090"
-GOOD = "#1E8449"
-WARN = "#B7950B"
-BAD = "#B03A2E"
+IS_DARK = st.context.theme.type == "dark"
+
+NAVY = "#5B8DEF" if IS_DARK else "#1F3864"     # primary accent, adapted for contrast
+ACCENT = "#7DA6F5" if IS_DARK else "#2E5090"
+GOOD = "#3FC97F" if IS_DARK else "#1E8449"
+WARN = "#E0B23D" if IS_DARK else "#B7950B"
+BAD = "#E5685A" if IS_DARK else "#B03A2E"
+
+CARD_BG = "#1B2532" if IS_DARK else "#FFFFFF"
+CARD_BORDER = "#2C394A" if IS_DARK else "#E3E7EF"
+TEXT_MAIN = "#E7ECF3" if IS_DARK else "#1A1A1A"
+TEXT_MUTED = "#A9B4C2" if IS_DARK else "#33404F"
 
 st.markdown(f"""
 <style>
@@ -30,12 +39,12 @@ st.markdown(f"""
     html, body, [class*="css"] {{ font-family: 'Inter', -apple-system, sans-serif; font-size: 16px; }}
     .block-container {{ padding-top: 1rem; padding-bottom: 2rem; max-width: 1500px; }}
 
-    /* KPI cards - larger, higher-contrast text (was too small/faint before) */
+    /* KPI cards - larger, higher-contrast text, colors follow the active theme */
     [data-testid="stMetric"] {{
-        background: #FFFFFF; border: 1px solid #E3E7EF; border-radius: 10px;
-        padding: 16px 18px 12px 18px; box-shadow: 0 1px 3px rgba(31,56,100,0.06);
+        background: {CARD_BG}; border: 1px solid {CARD_BORDER}; border-radius: 10px;
+        padding: 16px 18px 12px 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.12);
     }}
-    [data-testid="stMetricLabel"] p {{ color: #33404F !important; font-size: 1rem !important; font-weight: 600 !important; }}
+    [data-testid="stMetricLabel"] p {{ color: {TEXT_MUTED} !important; font-size: 1rem !important; font-weight: 600 !important; }}
     [data-testid="stMetricValue"] {{ color: {NAVY}; font-weight: 800; font-size: 2rem; font-variant-numeric: tabular-nums; }}
 
     h1 {{ color: {NAVY}; font-size: 2.3rem; }}
@@ -44,11 +53,11 @@ st.markdown(f"""
     p, label, .stCaption {{ font-size: 1rem; }}
 
     /* top tab bar - bigger, bolder, matches an Excel-sheet-tab look */
-    div[data-baseweb="tab-list"] {{ gap: 6px; border-bottom: 2px solid #E3E7EF; }}
-    button[data-baseweb="tab"] {{ font-size: 1.05rem; font-weight: 700; height: 46px; color: #33404F; }}
+    div[data-baseweb="tab-list"] {{ gap: 6px; border-bottom: 2px solid {CARD_BORDER}; }}
+    button[data-baseweb="tab"] {{ font-size: 1.05rem; font-weight: 700; height: 46px; color: {TEXT_MUTED}; }}
     button[data-baseweb="tab"][aria-selected="true"] {{ color: {NAVY}; border-bottom: 3px solid {NAVY}; }}
 
-    .section-divider {{ border-top: 2px solid #E3E7EF; margin: 1.6rem 0 1.2rem 0; }}
+    .section-divider {{ border-top: 2px solid {CARD_BORDER}; margin: 1.6rem 0 1.2rem 0; }}
 </style>
 """, unsafe_allow_html=True)
 
