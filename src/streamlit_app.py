@@ -13,6 +13,7 @@ from data_loader import load_data
 from scoring import load_models, score
 from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, group_for_lob, STATE_TO_REGION
 from bind_propensity import NEW_BROKER_DEFAULT_TIER
+from decision_matrix_reference import RISK_TIER_ORDER, RISK_TIER_INFO
 
 st.set_page_config(page_title="Commercial UW Risk Intelligence", layout="wide")
 
@@ -107,6 +108,16 @@ CATEGORICAL_OPTIONS = {
 LOB_OPTIONS = sorted(raw_book["line_of_business"].unique().tolist())
 TIER_COLORS = {"Preferred": GOOD, "Standard": "#5D8AA8", "High": WARN, "Decline": BAD}
 
+def style_risk_tier_column(df, tier_col="Risk Tier"):
+    """Colors the Risk Tier column's cell background to match the tier - same palette used
+    across every chart, so a tier means the same color everywhere in the app."""
+    def _color(val):
+        color = TIER_COLORS.get(val)
+        if color is None:
+            return ""
+        return f"background-color: {color}; color: white; font-weight: 600;"
+    return df.style.map(_color, subset=[tier_col])
+
 # ---------------------------------------------------------------------------
 # Top header - logo beside the project name, tabs directly below (replaces the old
 # sidebar navigation with an Excel-sheet-tab-style top nav)
@@ -120,8 +131,8 @@ with title_col:
     st.markdown(f"<h1 style='margin-bottom:0;'>Commercial UW Risk Intelligence</h1>", unsafe_allow_html=True)
     st.caption("Model-driven Loss Propensity scoring for commercial submissions")
 
-tab_portfolio, tab_dashboard, tab_submission = st.tabs(
-    ["Portfolio Overview", "Executive Dashboard", "Submission"]
+tab_submission, tab_portfolio, tab_dashboard = st.tabs(
+    ["Submission", "Portfolio Overview", "Executive Dashboard"]
 )
 
 # ============================================================================
@@ -130,17 +141,15 @@ with tab_portfolio:
         st.header("Portfolio Overview")
         book = get_scored_book()
 
-        c1, c2, c3 = st.columns(3)
+        c1, c2 = st.columns(2)
         lob_filter = c1.selectbox("Line of Business", ["All"] + LOB_OPTIONS, key="po_lob")
         tier_filter = c2.selectbox("Broker Tier", ["All"] + sorted(book["broker_tier"].dropna().unique().tolist()), key="po_broker")
-        score_range = c3.slider("Loss Propensity Score range", 0, 100, (0, 100), key="po_score_range")
 
         filtered = book.copy()
         if lob_filter != "All":
             filtered = filtered[filtered["line_of_business"] == lob_filter]
         if tier_filter != "All":
             filtered = filtered[filtered["broker_tier"] == tier_filter]
-        filtered = filtered[filtered["loss_propensity_score_v2"].between(*score_range)]
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Submissions", f"{len(filtered):,}")
@@ -186,27 +195,72 @@ with tab_dashboard:
         f1, f2, f3, f4, f5 = st.columns(5)
         lob_f = f1.selectbox("Line of Business", ["All"] + LOB_OPTIONS, key="ed_lob")
         occ_f = f2.selectbox("Occupancy Type", ["All"] + sorted(book["occupancy_type"].dropna().unique().tolist()), key="ed_occ")
-        tier_f = f3.selectbox("Loss-Only Tier", ["All", "Preferred", "Standard", "High", "Decline"], key="ed_tier")
+        tier_f = f3.selectbox("Risk Tier", ["All"] + RISK_TIER_ORDER, key="ed_tier")
         broker_f = f4.selectbox("Broker Tier", ["All"] + sorted(book["broker_tier"].dropna().unique().tolist()), key="ed_broker")
         renewal_f = f5.selectbox("Renewal / New Business", ["All", "Renewal", "New Business"], key="ed_renewal")
 
         fb = book.copy()
         if lob_f != "All": fb = fb[fb["line_of_business"] == lob_f]
         if occ_f != "All": fb = fb[fb["occupancy_type"] == occ_f]
-        if tier_f != "All": fb = fb[fb["loss_only_tier_v2"] == tier_f]
+        if tier_f != "All": fb = fb[fb["risk_tier"] == tier_f]
         if broker_f != "All": fb = fb[fb["broker_tier"] == broker_f]
         if renewal_f != "All": fb = fb[fb["renewal_flag"] == renewal_f]
 
         st.caption(f"Showing {len(fb):,} of {len(book):,} submissions ({len(fb)/len(book)*100:.1f}%) matching current filters")
 
-        k1, k2, k3, k4, k5, k6 = st.columns(6)
+        k1, k2, k3, k4, k5 = st.columns(5)
         k1.metric("Submissions", f"{len(fb):,}")
-        k2.metric("Total TIV", f"${fb['total_insured_value_usd'].sum()/1e9:.2f}B" if len(fb) else "$0")
-        k3.metric("Total Premium", f"${fb['indicated_annual_premium_usd'].sum()/1e6:.1f}M" if len(fb) else "$0")
-        k4.metric("Avg Loss Propensity", f"{fb['loss_propensity_score_v2'].mean():.1f}" if len(fb) else "-")
-        needs_review = (fb["loss_only_tier_v2"].isin(["High", "Decline"])).sum() if len(fb) else 0
-        k5.metric("Needs Review", f"{needs_review:,}", help="High + Decline tier count")
-        k6.metric("Large-Loss Count", f"{fb['large_claim_flag'].sum():,}" if len(fb) else "0")
+        k2.metric("Total Premium", f"${fb['indicated_annual_premium_usd'].sum()/1e6:.1f}M" if len(fb) else "$0")
+        k3.metric("Avg Loss Propensity", f"{fb['loss_propensity_score_0_100'].mean():.1f}" if len(fb) else "-")
+        needs_review = (fb["risk_tier"].isin(["High", "Decline"])).sum() if len(fb) else 0
+        k4.metric("Needs Review", f"{needs_review:,}", help="High + Decline tier count")
+        k5.metric("Large-Loss Count", f"{fb['large_claim_flag'].sum():,}" if len(fb) else "0")
+
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        st.subheader("Underwriting Decision Matrix — Risk Tier Reference")
+        if len(fb):
+            matrix_rows = []
+            for tier in RISK_TIER_ORDER:
+                tb = fb[fb["risk_tier"] == tier]
+                info = RISK_TIER_INFO[tier]
+                matrix_rows.append({
+                    "Risk Tier": tier,
+                    "Opportunity Premium": tb["indicated_annual_premium_usd"].sum() if len(tb) else 0,
+                    "UW Score Band": info["uw_score_band"],
+                    "Avg Loss Propensity": tb["loss_propensity_score_0_100"].mean() if len(tb) else None,
+                    "Avg Claim Count": tb["claim_count_total"].mean() if len(tb) else None,
+                    "Avg Bind Propensity": tb["bind_propensity_score_0_100"].mean() if len(tb) else None,
+                    "Avg Appetite Score": tb["appetite_capacity_score_0_100"].mean() if len(tb) else None,
+                    "Avg UW Score": tb["final_priority_score_0_100"].mean() if len(tb) else None,
+                    "What It Means": info["what_it_means"],
+                    "UW Action": info["uw_action"],
+                    "Pricing Guidance": info["pricing_guidance"],
+                })
+            matrix_rows.append({
+                "Risk Tier": "Total / Book Average",
+                "Opportunity Premium": fb["indicated_annual_premium_usd"].sum(),
+                "UW Score Band": "—",
+                "Avg Loss Propensity": fb["loss_propensity_score_0_100"].mean(),
+                "Avg Claim Count": fb["claim_count_total"].mean(),
+                "Avg Bind Propensity": fb["bind_propensity_score_0_100"].mean(),
+                "Avg Appetite Score": fb["appetite_capacity_score_0_100"].mean(),
+                "Avg UW Score": fb["final_priority_score_0_100"].mean(),
+                "What It Means": "", "UW Action": "", "Pricing Guidance": "",
+            })
+            matrix_df = pd.DataFrame(matrix_rows)
+            st.dataframe(
+                style_risk_tier_column(matrix_df, "Risk Tier"), width='stretch', hide_index=True,
+                column_config={
+                    "Opportunity Premium": st.column_config.NumberColumn("Opportunity Premium ($)", format="$%d"),
+                    "Avg Loss Propensity": st.column_config.NumberColumn("Avg Loss Propensity", format="%.1f"),
+                    "Avg Claim Count": st.column_config.NumberColumn("Avg Claim Count", format="%.2f"),
+                    "Avg Bind Propensity": st.column_config.NumberColumn("Avg Bind Propensity", format="%.1f"),
+                    "Avg Appetite Score": st.column_config.NumberColumn("Avg Appetite Score", format="%.1f"),
+                    "Avg UW Score": st.column_config.NumberColumn("Avg UW Score", format="%.1f"),
+                },
+            )
+        else:
+            st.info("No submissions match the current filter combination.")
 
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         st.subheader("Portfolio Visuals")
@@ -216,10 +270,10 @@ with tab_dashboard:
         else:
             c1, c2 = st.columns(2)
             with c1:
-                tier_counts = fb["loss_only_tier_v2"].value_counts().reindex(["Preferred", "Standard", "High", "Decline"]).fillna(0)
+                tier_counts = fb["risk_tier"].value_counts().reindex(RISK_TIER_ORDER).fillna(0)
                 fig = px.pie(names=tier_counts.index, values=tier_counts.values, hole=0.45,
                              color=tier_counts.index, color_discrete_map=TIER_COLORS,
-                             title="Loss-Only Tier Distribution")
+                             title="Risk Tier Distribution")
                 fig.update_traces(textinfo="percent+label", hovertemplate="%{label}: %{value:,} submissions (%{percent})<extra></extra>")
                 fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), showlegend=False, font=dict(size=13), title_font=dict(size=15))
                 st.plotly_chart(fig, width='stretch')
@@ -234,28 +288,14 @@ with tab_dashboard:
 
             c3, c4 = st.columns(2)
             with c3:
-                lr_by_lob = fb.groupby("line_of_business").apply(
-                    lambda g: g["total_expected_loss_cost"].sum() / g["indicated_annual_premium_usd"].sum() * 100
-                    if g["indicated_annual_premium_usd"].sum() > 0 else 0, include_groups=False
-                ).sort_values()
-                fig = px.bar(x=lr_by_lob.values, y=lr_by_lob.index, orientation="h",
-                             color=lr_by_lob.values, color_continuous_scale=[GOOD, WARN, BAD],
-                             title="Avg Loss Ratio (Predicted) by LOB",
-                             labels={"x": "Loss Ratio (%)", "y": ""})
-                fig.update_traces(texttemplate="%{x:.1f}%", textposition="outside", hovertemplate="%{y}: %{x:.1f}% predicted loss ratio<extra></extra>")
-                fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), coloraxis_showscale=False, font=dict(size=13), title_font=dict(size=15))
-                st.plotly_chart(fig, width='stretch')
-            with c4:
-                ct = fb.groupby(["line_of_business", "loss_only_tier_v2"], observed=True).size().reset_index(name="count")
-                fig = px.bar(ct, x="count", y="line_of_business", color="loss_only_tier_v2", orientation="h",
-                             color_discrete_map=TIER_COLORS, title="Submission Count by LOB x Tier",
-                             labels={"count": "Submissions", "line_of_business": "", "loss_only_tier_v2": "Tier"})
+                ct = fb.groupby(["line_of_business", "risk_tier"], observed=True).size().reset_index(name="count")
+                fig = px.bar(ct, x="count", y="line_of_business", color="risk_tier", orientation="h",
+                             color_discrete_map=TIER_COLORS, title="Submission Count by LOB x Risk Tier",
+                             labels={"count": "Submissions", "line_of_business": "", "risk_tier": "Tier"})
                 fig.update_traces(hovertemplate="%{y}<br>%{fullData.name}: %{x:,} submissions<extra></extra>")
                 fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), legend_title="", font=dict(size=13), title_font=dict(size=15))
                 st.plotly_chart(fig, width='stretch')
-
-            c5, c6 = st.columns(2)
-            with c5:
+            with c4:
                 tiv_region = fb.groupby("risk_location_region")["total_insured_value_usd"].sum().sort_values() / 1e6
                 fig = px.bar(x=tiv_region.values, y=tiv_region.index, orientation="h",
                              color_discrete_sequence=[ACCENT],
@@ -263,46 +303,65 @@ with tab_dashboard:
                 fig.update_traces(hovertemplate="%{y}: $%{x:,.1f}M total TIV<extra></extra>")
                 fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), font=dict(size=13), title_font=dict(size=15))
                 st.plotly_chart(fig, width='stretch')
-            with c6:
-                large_by_tier = fb.groupby("loss_only_tier_v2", observed=True)["large_claim_flag"].sum().reindex(
-                    ["Preferred", "Standard", "High", "Decline"]).fillna(0)
+
+            c5, c6 = st.columns(2)
+            with c5:
+                large_by_tier = fb.groupby("risk_tier", observed=True)["large_claim_flag"].sum().reindex(RISK_TIER_ORDER).fillna(0)
                 fig = px.bar(x=large_by_tier.index, y=large_by_tier.values,
                              color=large_by_tier.index, color_discrete_map=TIER_COLORS,
-                             title="Large-Loss Count by Tier", labels={"x": "", "y": "Large-Loss Count"})
-                fig.update_traces(hovertemplate="%{x}: %{y:,} large losses<extra></extra>")
-                fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), showlegend=False, font=dict(size=13), title_font=dict(size=15))
+                             title="Large-Loss Count by Tier", labels={"x": "", "y": "Large-Loss Count"},
+                             text=large_by_tier.values)
+                fig.update_traces(hovertemplate="%{x}: %{y:,} large losses<extra></extra>",
+                                   texttemplate="%{text:,.0f}", textposition="outside")
+                fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=30), showlegend=False, font=dict(size=13), title_font=dict(size=15))
                 st.plotly_chart(fig, width='stretch')
-
-            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-            c7, c8 = st.columns(2)
-            with c7:
-                score_by_tier = fb.groupby("loss_only_tier_v2", observed=True).agg(
-                    Loss=("loss_propensity_score_v2", "mean"),
-                    Bind=("bind_propensity_score_v2", "mean"),
-                    Appetite=("appetite_capacity_score_v2", "mean"),
-                ).reindex(["Preferred", "Standard", "High", "Decline"]).reset_index()
-                score_by_tier_long = score_by_tier.melt(id_vars="loss_only_tier_v2", var_name="Score Type", value_name="Avg Score")
-                fig = px.bar(score_by_tier_long, x="loss_only_tier_v2", y="Avg Score", color="Score Type",
+            with c6:
+                score_by_tier = fb.groupby("risk_tier", observed=True).agg(
+                    Loss=("loss_propensity_score_0_100", "mean"),
+                    Bind=("bind_propensity_score_0_100", "mean"),
+                    Appetite=("appetite_capacity_score_0_100", "mean"),
+                ).reindex(RISK_TIER_ORDER).reset_index()
+                score_by_tier_long = score_by_tier.melt(id_vars="risk_tier", var_name="Score Type", value_name="Avg Score")
+                fig = px.bar(score_by_tier_long, x="risk_tier", y="Avg Score", color="Score Type",
                              barmode="group", title="Avg Loss / Bind / Appetite Score by Tier",
-                             color_discrete_sequence=[BAD, ACCENT, GOOD], labels={"loss_only_tier_v2": ""})
+                             color_discrete_sequence=[BAD, ACCENT, GOOD], labels={"risk_tier": ""})
                 fig.update_traces(hovertemplate="%{x}<br>%{fullData.name}: %{y:.1f}<extra></extra>")
                 fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), legend_title="", font=dict(size=13), title_font=dict(size=15))
                 st.plotly_chart(fig, width='stretch')
-            with c8:
-                bind_by_broker = fb.groupby("broker_tier")["bind_propensity_score_v2"].mean().reindex(
+
+            c7, c8 = st.columns(2)
+            with c7:
+                bind_by_broker = fb.groupby("broker_tier")["bind_propensity_score_0_100"].mean().reindex(
                     ["Platinum", "Gold", "Silver", "Bronze"]).dropna()
                 fig = px.bar(x=bind_by_broker.index, y=bind_by_broker.values, color_discrete_sequence=[ACCENT],
                              title="Avg Bind Propensity by Broker Tier", labels={"x": "", "y": "Avg Bind Propensity"})
                 fig.update_traces(hovertemplate="%{x} brokers: %{y:.1f} avg Bind Propensity<extra></extra>")
                 fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), font=dict(size=13), title_font=dict(size=15))
                 st.plotly_chart(fig, width='stretch')
+            with c8:
+                bind_by_size = fb.groupby("broker_size_class")["bind_propensity_score_0_100"].mean().sort_values()
+                fig = px.bar(x=bind_by_size.values, y=bind_by_size.index, orientation="h", color_discrete_sequence=[ACCENT],
+                             title="Avg Bind Propensity by Broker Size", labels={"x": "Avg Bind Propensity", "y": ""})
+                fig.update_traces(hovertemplate="%{y}: %{x:.1f} avg Bind Propensity<extra></extra>")
+                fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), font=dict(size=13), title_font=dict(size=15))
+                st.plotly_chart(fig, width='stretch')
 
-            bind_by_size = fb.groupby("broker_size_class")["bind_propensity_score_v2"].mean().sort_values()
-            fig = px.bar(x=bind_by_size.values, y=bind_by_size.index, orientation="h", color_discrete_sequence=[ACCENT],
-                         title="Avg Bind Propensity by Broker Size", labels={"x": "Avg Bind Propensity", "y": ""})
-            fig.update_traces(hovertemplate="%{y}: %{x:.1f} avg Bind Propensity<extra></extra>")
-            fig.update_layout(height=280, margin=dict(l=10, r=10, t=50, b=10), font=dict(size=13), title_font=dict(size=15))
-            st.plotly_chart(fig, width='stretch')
+            st.markdown("**Broker Size Segmentation**")
+            seg = fb.groupby("broker_size_class").agg(
+                Count=("submission_id", "count"),
+                New_Biz_Pct=("renewal_flag", lambda x: (x == "New Business").mean() * 100),
+                Historical_Loss_Ratio_Pct=("loss_ratio_after_propensity_pct", "mean"),
+                Renewal_Retention_Pct=("broker_renewal_retention_pct", "mean"),
+            ).reset_index()
+            st.dataframe(
+                seg, width='stretch', hide_index=True,
+                column_config={
+                    "broker_size_class": "Segment", "Count": "Count",
+                    "New_Biz_Pct": st.column_config.NumberColumn("New Biz %", format="%.1f%%"),
+                    "Historical_Loss_Ratio_Pct": st.column_config.NumberColumn("Historical Loss Ratio %", format="%.1f%%"),
+                    "Renewal_Retention_Pct": st.column_config.NumberColumn("Renewal Retention %", format="%.1f%%"),
+                },
+            )
 
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             st.subheader("Claims Overview")
@@ -316,14 +375,33 @@ with tab_dashboard:
             c6.metric("Catastrophic-Loss Count", f"{fb['catastrophic_loss_flag'].sum():,}")
 
             st.markdown("**Claims Detail by Line of Business**")
-            detail = fb.groupby("line_of_business").agg(
+            detail_lob = fb.groupby("line_of_business").agg(
                 Submissions_w_Claim=("claim_count_total", lambda x: (x > 0).sum()),
                 Total_Incurred=("total_incurred_claim_amount_usd", "sum"),
                 Large_Loss_Count=("large_claim_flag", "sum"),
                 Litigated_Count=("litigated_claim_flag", "sum"),
+                Avg_Claim_Count=("claim_count_total", "mean"),
             ).reset_index()
-            st.dataframe(detail, width='stretch', hide_index=True,
-                         column_config={"Total_Incurred": st.column_config.NumberColumn("Total Incurred", format="$%d")})
+            st.dataframe(detail_lob, width='stretch', hide_index=True,
+                         column_config={
+                             "Total_Incurred": st.column_config.NumberColumn("Total Incurred", format="$%d"),
+                             "Avg_Claim_Count": st.column_config.NumberColumn("Avg Claim Count", format="%.2f"),
+                         })
+
+            st.markdown("**Claims Detail by Risk Tier**")
+            detail_tier = fb.groupby("risk_tier", observed=True).agg(
+                Submissions_w_Claim=("claim_count_total", lambda x: (x > 0).sum()),
+                Total_Incurred=("total_incurred_claim_amount_usd", "sum"),
+                Large_Loss_Count=("large_claim_flag", "sum"),
+                Catastrophic_Loss_Count=("catastrophic_loss_flag", "sum"),
+                Avg_Claim_Count=("claim_count_total", "mean"),
+            ).reindex(RISK_TIER_ORDER).reset_index()
+            st.dataframe(style_risk_tier_column(detail_tier, "risk_tier"), width='stretch', hide_index=True,
+                         column_config={
+                             "risk_tier": "Risk Tier",
+                             "Total_Incurred": st.column_config.NumberColumn("Total Incurred", format="$%d"),
+                             "Avg_Claim_Count": st.column_config.NumberColumn("Avg Claim Count", format="%.2f"),
+                         })
 
             st.markdown("**Large-Loss Count by Peril / Cause of Claim**")
             large = fb[fb["large_claim_flag"] == 1]
@@ -336,6 +414,72 @@ with tab_dashboard:
                 st.plotly_chart(fig, width='stretch')
             else:
                 st.info("No large losses in the current filter.")
+
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+            st.subheader("Decision Output 1 — Top 20 Referral Queue")
+            referral = fb.sort_values("loss_ratio_before_propensity_pct", ascending=False).head(20)
+            referral_display = referral[["submission_id", "line_of_business", "risk_location_region", "total_insured_value_usd",
+                          "loss_ratio_before_propensity_pct", "risk_tier", "large_claim_flag",
+                          "loss_propensity_score_0_100", "bind_propensity_score_0_100", "appetite_capacity_score_0_100",
+                          "final_priority_score_0_100", "primary_cause_of_claim", "hospital_visit_count",
+                          "expected_further_visits", "recommended_uw_action", "decline_review_reason"]]
+            st.dataframe(
+                style_risk_tier_column(referral_display, "risk_tier"),
+                width='stretch', hide_index=True,
+                column_config={
+                    "submission_id": "Submission ID", "line_of_business": "LOB", "risk_location_region": "Risk Region",
+                    "total_insured_value_usd": st.column_config.NumberColumn("TIV", format="$%d"),
+                    "loss_ratio_before_propensity_pct": st.column_config.NumberColumn("Loss Ratio Before", format="%.1f%%"),
+                    "risk_tier": "Risk Tier", "large_claim_flag": st.column_config.CheckboxColumn("Large Loss?"),
+                    "loss_propensity_score_0_100": "Loss Prop.", "bind_propensity_score_0_100": "Bind Prop.",
+                    "appetite_capacity_score_0_100": "Appetite/Cap.", "final_priority_score_0_100": "UW Score",
+                    "primary_cause_of_claim": "Cause of Claim", "hospital_visit_count": "Hosp. Visits",
+                    "expected_further_visits": "Exp. Further Visits", "recommended_uw_action": "Recommended UW Action",
+                    "decline_review_reason": "Reason for Decline/Refer",
+                },
+            )
+
+            st.subheader("Decision Output 2 — Top 10 Priority Opportunities")
+            priority_pool = fb[fb["appetite_capacity_decision"] == "Within Appetite"]
+            priority = priority_pool.sort_values("final_priority_score_0_100", ascending=False).head(10)
+            priority_display = priority[["submission_id", "line_of_business", "risk_location_region", "broker_tier",
+                          "total_insured_value_usd", "loss_ratio_after_propensity_pct", "risk_tier",
+                          "loss_propensity_score_0_100", "bind_propensity_score_0_100", "appetite_capacity_score_0_100",
+                          "final_priority_score_0_100", "appetite_capacity_decision", "recommended_uw_action",
+                          "priority_strength_reason"]]
+            st.dataframe(
+                style_risk_tier_column(priority_display, "risk_tier"),
+                width='stretch', hide_index=True,
+                column_config={
+                    "submission_id": "Submission ID", "line_of_business": "LOB", "risk_location_region": "Risk Region",
+                    "broker_tier": "Broker Tier",
+                    "total_insured_value_usd": st.column_config.NumberColumn("TIV", format="$%d"),
+                    "loss_ratio_after_propensity_pct": st.column_config.NumberColumn("Loss Ratio After", format="%.1f%%"),
+                    "risk_tier": "Risk Tier", "loss_propensity_score_0_100": "Loss Prop.",
+                    "bind_propensity_score_0_100": "Bind Prop.", "appetite_capacity_score_0_100": "Appetite/Cap.",
+                    "final_priority_score_0_100": "UW Score", "appetite_capacity_decision": "Appetite Decision",
+                    "recommended_uw_action": "Recommended UW Action", "priority_strength_reason": "Reason This Is a Priority",
+                },
+            )
+
+            st.subheader("Decision Output 3 — Emerging Risk Watch List")
+            watch_pool = fb[fb["claim_count_total"] <= 1]
+            watch = watch_pool.sort_values("prospective_risk_flag_count", ascending=False).head(15)
+            watch_display = watch[["submission_id", "line_of_business", "risk_location_region", "broker_tier",
+                       "total_insured_value_usd", "risk_tier", "claim_count_total", "loss_propensity_score_0_100",
+                       "prospective_risk_flag_count", "prospective_risk_flags", "recommended_uw_action"]]
+            st.dataframe(
+                style_risk_tier_column(watch_display, "risk_tier"),
+                width='stretch', hide_index=True,
+                column_config={
+                    "submission_id": "Submission ID", "line_of_business": "LOB", "risk_location_region": "Risk Region",
+                    "broker_tier": "Broker Tier",
+                    "total_insured_value_usd": st.column_config.NumberColumn("TIV", format="$%d"),
+                    "risk_tier": "Risk Tier", "claim_count_total": "Claim Count",
+                    "loss_propensity_score_0_100": "Loss Prop.", "prospective_risk_flag_count": "Flag Count",
+                    "prospective_risk_flags": "Prospective Risk Factors", "recommended_uw_action": "Recommended UW Action",
+                },
+            )
 
     # ============================================================================
 
