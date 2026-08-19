@@ -68,6 +68,30 @@ for group_name, lobs, features in GROUPS:
 
     glm = Pipeline([("prep", pre), ("model", PoissonRegressor(alpha=0.01, max_iter=500))])
     glm.fit(Xtr, ytr_freq, model__sample_weight=etr)
+
+    # Same safeguard used in large_loss_model.py: a GLM coefficient that contradicts a known
+    # real-world direction is a red flag, not real signal - found exactly this with
+    # debt_to_equity_ratio (fit negative, i.e. "more debt -> fewer claims", backwards) which
+    # was causing a small but real non-monotonic wobble in the combined score. Drop and refit
+    # rather than keep a spurious driver.
+    ohe_check = glm.named_steps["prep"].named_transformers_["cat"].named_steps["onehot"]
+    feat_names_check = num_cols + list(ohe_check.get_feature_names_out(cat_cols))
+    coefs_check = pd.Series(glm.named_steps["model"].coef_.ravel(), index=feat_names_check)
+    contradicting = [f for f, d in MONOTONIC_DIRECTION.items()
+                      if f in coefs_check.index and np.sign(coefs_check[f]) not in (0, d)]
+    if contradicting:
+        print(f"Dropping (contradicts known direction): {contradicting}")
+        num_cols = [c for c in num_cols if c not in contradicting]
+        X = X.drop(columns=contradicting)
+        pre = ColumnTransformer([
+            ("num", Pipeline([("impute", SimpleImputer(strategy="median")), ("scale", StandardScaler())]), num_cols),
+            ("cat", Pipeline([("impute", SimpleImputer(strategy="constant", fill_value="Missing")),
+                               ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False))]), cat_cols),
+        ])
+        Xtr, Xte = X.loc[train_idx], X.loc[test_idx]
+        glm = Pipeline([("prep", pre), ("model", PoissonRegressor(alpha=0.01, max_iter=500))])
+        glm.fit(Xtr, ytr_freq, model__sample_weight=etr)
+
     glm_pred = glm.predict(Xte)
     glm_dev = mean_poisson_deviance(yte_freq.clip(lower=1e-6), glm_pred.clip(min=1e-6), sample_weight=ete)
     print(f"GLM (Poisson) - mean deviance: {glm_dev:.4f}")

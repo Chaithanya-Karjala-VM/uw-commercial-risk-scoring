@@ -11,7 +11,8 @@ import plotly.graph_objects as go
 import streamlit as st
 from data_loader import load_data
 from scoring import load_models, score
-from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, group_for_lob
+from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, group_for_lob, STATE_TO_REGION
+from bind_propensity import NEW_BROKER_DEFAULT_TIER
 
 st.set_page_config(page_title="Commercial UW Risk Intelligence", layout="wide")
 
@@ -343,7 +344,19 @@ with tab_submission:
         st.caption("Enter the submission details below to generate a model-predicted risk score - "
                    "applies to any submission received, new business or renewal alike.")
 
-        lob = st.selectbox("Line of Business", LOB_OPTIONS, key="sub_lob")
+        def _reset_tier_to_segment_default():
+            # widgets with a key only use their initial value once - after that, index=
+            # is silently ignored on rerun, so the tier default must be forced via an
+            # on_change callback instead, or it never actually updates when segment changes
+            st.session_state["sub_broker_tier"] = NEW_BROKER_DEFAULT_TIER[st.session_state["sub_broker_segment"]]
+
+        lob_col, segment_col = st.columns(2)
+        lob = lob_col.selectbox("Line of Business", LOB_OPTIONS, key="sub_lob")
+        broker_segment = segment_col.selectbox(
+            "Broker Capacity Segment", ["Large National", "Regional", "Small Independent"],
+            key="sub_broker_segment", on_change=_reset_tier_to_segment_default,
+            help="For a new broker relationship. Broker Tier below defaults to the typical "
+                 "tier for this segment, and can be changed if the actual tier is known.")
         group = group_for_lob(lob)
         is_property = group == "property"
         st.caption(
@@ -408,15 +421,15 @@ with tab_submission:
 
             with col4:
                 st.markdown("**Broker**")
-                broker_tier = st.selectbox("Broker Tier", ["Platinum", "Gold", "Silver", "Bronze"], key="sub_broker_tier")
-                broker_hit_bind_ratio_pct = st.slider("Broker Hit/Bind Ratio (%)", 0, 100, 40)
-                broker_renewal_retention_pct = st.slider("Broker Renewal Retention (%)", 0, 100, 92)
-                broker_product_diversity_count = st.number_input("Broker Product Diversity (count)", 0, 15, 3)
-                broker_geo_diversity_count = st.number_input("Broker Geo Diversity (count)", 0, 15, 3)
-                broker_profitability_score_0_100 = st.slider("Broker Profitability Score", 0, 100, 45)
-                quote_to_bind_days = st.number_input("Quote-to-Bind Days", 0, 120, 20)
+                tier_options = ["Platinum", "Gold", "Silver", "Bronze"]
+                st.session_state.setdefault("sub_broker_tier", NEW_BROKER_DEFAULT_TIER[broker_segment])
+                broker_tier = st.selectbox(
+                    "Broker Tier", tier_options, key="sub_broker_tier",
+                    help=f"Defaults to the typical tier for {broker_segment}. "
+                         f"Change this if the broker's actual tier is already known.")
                 competing_quotes_count = st.number_input("Competing Quotes Count", 0, 10, 2)
-                submission_completeness_pct = st.slider("Submission Completeness (%)", 0, 100, 85)
+                risk_state = st.selectbox("State", sorted(STATE_TO_REGION.keys()), index=sorted(STATE_TO_REGION.keys()).index("CA"))
+                coverage_limit_requested_usd = st.number_input("Coverage Limit Requested ($)", 50000, 50000000, 500000, step=10000)
 
                 st.markdown("**Compliance & Appetite**")
                 sanctions_flag = st.selectbox("Sanctions/OFAC Watchlist Hit", ["No", "Yes"]) == "Yes"
@@ -471,13 +484,8 @@ with tab_submission:
                 "safety_inspection_findings": safety_inspection_findings,
                 "business_tenure_years": business_tenure_years, "revenue_growth_trend_pct": revenue_growth_trend_pct,
                 "debt_to_equity_ratio": debt_to_equity_ratio, "policy_term_months": policy_term_months,
-                "broker_tier": broker_tier, "broker_hit_bind_ratio_pct": broker_hit_bind_ratio_pct,
-                "broker_renewal_retention_pct": broker_renewal_retention_pct,
-                "broker_product_diversity_count": broker_product_diversity_count,
-                "broker_geo_diversity_count": broker_geo_diversity_count,
-                "broker_profitability_score_0_100": broker_profitability_score_0_100,
-                "quote_to_bind_days": quote_to_bind_days, "competing_quotes_count": competing_quotes_count,
-                "submission_completeness_pct": submission_completeness_pct,
+                "broker_tier": broker_tier, "competing_quotes_count": competing_quotes_count,
+                "risk_state": risk_state, "coverage_limit_requested_usd": coverage_limit_requested_usd,
                 "sanctions_ofac_watchlist_flag": int(sanctions_flag),
                 "prior_insolvency_bankruptcy_flag": int(insolvency_flag),
                 "restricted_operations_flag": int(restricted_ops_flag),

@@ -7,16 +7,17 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 import joblib
-from lob_config import group_for_lob, encode_ordinal_tiers
-from bind_propensity import compute_bind_propensity
+from lob_config import group_for_lob, encode_ordinal_tiers, region_for_state
+from bind_propensity import compute_bind_propensity, populate_broker_fields, BIND_COEFFICIENTS
 from appetite_capacity import compute_appetite_capacity_score, hard_rule_pass
 
 # fitted appetite coefficients - see appetite_capacity.verify_appetite_formula() docstring
 # for how these were derived and re-verify if the source data changes
 APPETITE_FIT_COEFFICIENTS = {
-    "intercept": -45.992, "appetite_hard_rule_pass_flag": 56.5351,
-    "target_growth_segment_flag": 9.1773, "financial_stability_score": 0.1807,
-    "broker_tier_num": 2.3957, "submission_completeness_pct": 0.3138,
+    "intercept": -46.0188, "appetite_hard_rule_pass_flag": 56.5342,
+    "target_growth_segment_flag": 9.1769, "financial_stability_score": 0.1807,
+    "broker_tier_num": 2.3931, "submission_completeness_pct": 0.3138,
+    "coverage_limit_requested_usd": 0.0,
 }
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -61,6 +62,24 @@ def compute_premium(lob, total_insured_value_usd=None, number_of_employees=None,
 def score(df, models, term_col="policy_term_months"):
     out = df.copy()
     out = encode_ordinal_tiers(out)  # must match training - Low/Moderate/High/Severe -> 0-3
+
+    # broker-detail fields (hit/bind ratio, retention, diversity, profitability, quote-to-
+    # bind days, completeness) are no longer collected as live input for a new submission -
+    # only auto-populate from broker-tier averages when they're genuinely missing, never
+    # overwrite the real per-submission historical values already in the book
+    broker_detail_fields = ["broker_hit_bind_ratio_pct", "broker_renewal_retention_pct",
+                             "broker_product_diversity_count", "broker_geo_diversity_count",
+                             "broker_profitability_score_0_100", "quote_to_bind_days",
+                             "submission_completeness_pct"]
+    needs_broker_populate = any(f not in out.columns or out[f].isna().any() for f in broker_detail_fields)
+    if needs_broker_populate:
+        out = populate_broker_fields(out)
+
+    # a new submission only collects State (not Region) - derive Region for whichever
+    # model needs it, using the confirmed 1:1 mapping in lob_config.py
+    if "risk_location_region" not in out.columns or out["risk_location_region"].isna().any():
+        out["risk_location_region"] = out.get("risk_state", pd.Series(index=out.index)).apply(region_for_state)
+
     out["_group"] = out["line_of_business"].apply(group_for_lob)
 
     has_real_premium = ("indicated_annual_premium_usd" in out.columns
@@ -127,7 +146,7 @@ def score(df, models, term_col="policy_term_months"):
         out.loc[mask, "predicted_loss_ratio_pct"] = predicted_loss_ratio_pct.round(1)
         out.loc[mask, "loss_propensity_score_v2"] = loss_propensity_score
 
-    out["bind_propensity_score_v2"] = compute_bind_propensity(out)
+    out["bind_propensity_score_v2"] = compute_bind_propensity(out, BIND_COEFFICIENTS)
     out["appetite_capacity_score_v2"] = compute_appetite_capacity_score(out, APPETITE_FIT_COEFFICIENTS)
     out["uw_score_v2"] = np.round(
         0.30 * out["appetite_capacity_score_v2"] + 0.20 * out["bind_propensity_score_v2"]

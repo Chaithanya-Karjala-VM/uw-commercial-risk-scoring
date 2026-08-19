@@ -33,6 +33,17 @@ print(f"\nvs. stored score: correlation {v2.corr(stored):.3f}, avg diff {(v2-sto
 print("\nLoss Propensity Score v2 - distribution:")
 print(v2.describe().round(1).to_string())
 
+print("\nBind Propensity Score v2 - distribution:")
+print(df["bind_propensity_score_v2"].describe().round(1).to_string())
+
+print("\nAppetite/Capacity Score v2 - distribution:")
+print(df["appetite_capacity_score_v2"].describe().round(1).to_string())
+outside_appetite_pct = (df["appetite_capacity_score_v2"] == 0).mean() * 100
+print(f"Submissions outside appetite (hard-rule gate failed): {outside_appetite_pct:.1f}%")
+
+print("\nFinal UW Score v2 - distribution:")
+print(df["uw_score_v2"].describe().round(1).to_string())
+
 os.makedirs("../reports", exist_ok=True)
 df.to_excel("../reports/scored_book.xlsx", index=False)
 print("\nFull scored book saved to ../reports/scored_book.xlsx")

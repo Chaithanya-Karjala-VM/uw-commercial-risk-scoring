@@ -76,3 +76,21 @@ def encode_ordinal_tiers(df):
         if c in df.columns:
             df[c] = df[c].map(ORDINAL_TIER_MAP)
     return df
+
+
+# Derived directly from the data - confirmed a clean 1:1 mapping, every state maps to
+# exactly one region with zero exceptions across all 20,000 rows. Lets the Submission form
+# collect State only, with Region derived automatically for whichever model needs it.
+STATE_TO_REGION = {
+    'AL': 'Gulf Coast', 'AZ': 'Southwest', 'CA': 'West', 'CO': 'Mountain', 'CT': 'Northeast',
+    'FL': 'Southeast', 'GA': 'Southeast', 'ID': 'Mountain', 'IL': 'Midwest', 'IN': 'Midwest',
+    'LA': 'Gulf Coast', 'MA': 'Northeast', 'MI': 'Midwest', 'MO': 'Midwest', 'MS': 'Gulf Coast',
+    'MT': 'Mountain', 'NC': 'Southeast', 'NJ': 'Northeast', 'NM': 'Southwest', 'NV': 'West',
+    'NY': 'Northeast', 'OH': 'Midwest', 'OK': 'Southwest', 'OR': 'Pacific Northwest',
+    'PA': 'Northeast', 'SC': 'Southeast', 'TX': 'Gulf Coast', 'UT': 'Mountain',
+    'WA': 'Pacific Northwest', 'WI': 'Midwest', 'WY': 'Mountain',
+}
+
+
+def region_for_state(state):
+    return STATE_TO_REGION.get(state, "Midwest")  # fallback to the most common region

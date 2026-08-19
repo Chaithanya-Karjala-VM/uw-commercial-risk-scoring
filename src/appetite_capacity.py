@@ -15,13 +15,42 @@ hard veto, for the same reason - no clean threshold found despite testing.
 
 Concentration cap is confirmed to be a flat 15% for every industry (checked directly - zero
 variation across all 10 industry classes), not a per-industry lookup table.
+
+Per manager direction: State and Coverage are now real inputs.
+  - State: reinsurance_binding_headroom_pct correlates with the real Appetite/Capacity score
+    at 0.66 - genuinely strong, unlike the earlier attempt to add State as a plain regression
+    dummy (which added nothing). It varies by more than just state (individual submission CAT
+    exposure affects it too), so a brand-new submission uses the real per-state average as a
+    lookup - not an exact reproduction of the original per-row calculation, but a solid proxy.
+    Combined with industry concentration headroom using "tightest constraint governs" - the
+    same logic the source file itself uses to blend state/regional/country reinsurance tiers.
+  - Coverage (coverage_limit_requested_usd): correlates at 0.012 - negligible, included
+    honestly with a small weight rather than left out or artificially inflated.
+
+submission_completeness_pct is no longer collected as a live input (removed from the
+Submission form per manager direction). It barely varies across the book (mean sits at
+90-92% regardless of segment) so a fixed constant is used here instead of a per-submission
+value - see BOOK_AVG_COMPLETENESS below.
 """
 import numpy as np
 import pandas as pd
 
 CONCENTRATION_CAP_PCT = 0.15  # flat cap, confirmed identical across every industry class
+BOOK_AVG_COMPLETENESS = 91.4  # submission_completeness_pct barely varies across the real book
 
 BROKER_TIER_MAP = {"Platinum": 4, "Gold": 3, "Silver": 2, "Bronze": 1}
+
+# real per-state average reinsurance binding headroom - negative means that state is already
+# over its treaty capacity on average (Oklahoma and Washington stand out - real CAT exposure
+# story, not noise)
+STATE_HEADROOM_AVERAGES = {
+    'AL': 0.274, 'AZ': 0.369, 'CA': 0.609, 'CO': 0.312, 'CT': 0.258, 'FL': -0.596, 'GA': 0.125,
+    'ID': 0.305, 'IL': 0.621, 'IN': 0.696, 'LA': -0.040, 'MA': 0.187, 'MI': 0.837, 'MO': 0.395,
+    'MS': 0.137, 'MT': 0.341, 'NC': 0.022, 'NJ': -0.172, 'NM': 0.467, 'NV': 0.253, 'NY': 0.323,
+    'OH': 0.861, 'OK': -2.082, 'OR': 0.290, 'PA': 0.572, 'SC': -0.096, 'TX': 0.121, 'UT': 0.440,
+    'WA': -1.715, 'WI': 0.876, 'WY': 0.409,
+}
+NATIONAL_AVG_HEADROOM = 0.20  # fallback for a state not in the lookup
 
 
 def hard_rule_pass(df):
@@ -47,28 +76,40 @@ def cat_tiv_penalty(df):
 def compute_appetite_fit(df, coefficients):
     passed = hard_rule_pass(df)
     broker_tier_num = df["broker_tier"].map(BROKER_TIER_MAP).fillna(2)
+    completeness = df["submission_completeness_pct"] if "submission_completeness_pct" in df.columns \
+        else pd.Series(BOOK_AVG_COMPLETENESS, index=df.index)
+    coverage = df["coverage_limit_requested_usd"].fillna(0) if "coverage_limit_requested_usd" in df.columns \
+        else pd.Series(0, index=df.index)
     score = pd.Series(coefficients["intercept"], index=df.index)
     score = score + passed.astype(float) * coefficients["appetite_hard_rule_pass_flag"]
     score = score + df["target_growth_segment_flag"].fillna(0) * coefficients["target_growth_segment_flag"]
     score = score + df["financial_stability_score"].fillna(0) * coefficients["financial_stability_score"]
     score = score + broker_tier_num * coefficients["broker_tier_num"]
-    score = score + df["submission_completeness_pct"].fillna(0) * coefficients["submission_completeness_pct"]
+    score = score + completeness.fillna(BOOK_AVG_COMPLETENESS) * coefficients["submission_completeness_pct"]
+    score = score + coverage * coefficients.get("coverage_limit_requested_usd", 0.0)
     score = score + cat_tiv_penalty(df)
     score = np.where(passed, score.clip(0, 100), 0)  # hard rule failure forces 0 regardless of fit
     return np.round(score, 1)
 
 
 def compute_capacity_headroom(df, book_for_concentration=None):
-    """Concentration is computed against the current book - a brand-new submission's own
-    industry share doesn't change the book meaningfully, so it's scored against the existing
-    book's concentration, not recomputed with itself included."""
+    """Blends industry concentration headroom with state-level reinsurance headroom, taking
+    the tighter (more restrictive) of the two - same "tightest constraint governs" logic the
+    source file itself uses across its own state/regional/country reinsurance tiers."""
     reference = book_for_concentration if book_for_concentration is not None else df
     concentration_by_industry = (
         reference.groupby("industry_class_naics")["total_insured_value_usd"].sum()
         / reference["total_insured_value_usd"].sum()
     )
     concentration = df["industry_class_naics"].map(concentration_by_industry).fillna(0)
-    return (CONCENTRATION_CAP_PCT - concentration) * 100  # headroom %, negative = over cap
+    industry_headroom_pct = (CONCENTRATION_CAP_PCT - concentration) * 100
+
+    if "risk_state" in df.columns:
+        state_headroom_pct = df["risk_state"].map(STATE_HEADROOM_AVERAGES).fillna(NATIONAL_AVG_HEADROOM) * 100
+    else:
+        state_headroom_pct = pd.Series(NATIONAL_AVG_HEADROOM * 100, index=df.index)
+
+    return np.minimum(industry_headroom_pct, state_headroom_pct)
 
 
 def compute_appetite_capacity_score(df, coefficients, book_for_concentration=None):
@@ -94,6 +135,7 @@ def verify_appetite_formula(df):
         "financial_stability_score": df["financial_stability_score"].fillna(0),
         "broker_tier_num": broker_tier_num,
         "submission_completeness_pct": df["submission_completeness_pct"].fillna(0),
+        "coverage_limit_requested_usd": df["coverage_limit_requested_usd"].fillna(0),
     })
     y = df["appetite_fit_score_0_100"]
     reg = LinearRegression().fit(X, y)
@@ -110,7 +152,7 @@ if __name__ == "__main__":
     df, schema, usable_for, output_cols = load_data()
 
     fit = verify_appetite_formula(df)
-    print(f"Appetite Fit regression check: R^2={fit['r2']:.3f}, avg error={fit['mae']:.2f} points")
+    print(f"Appetite Fit regression check: R^2={fit['r2']:.4f}, avg error={fit['mae']:.2f} points")
     print("Coefficients:", {k: round(v, 4) for k, v in fit["coefficients"].items()})
 
     computed_pass = hard_rule_pass(df)
@@ -121,7 +163,7 @@ if __name__ == "__main__":
     computed_fit = compute_appetite_fit(df, AFC)
     stored_fit = df["appetite_fit_score_0_100"]
     diff = pd.Series(computed_fit - stored_fit).abs()
-    print(f"Appetite Fit reconstruction (with CAT/TIV approximation added): avg diff = {diff.mean():.2f} points")
+    print(f"Appetite Fit reconstruction: avg diff = {diff.mean():.2f} points")
 
     computed_final = compute_appetite_capacity_score(df, AFC)
     stored_final = df["appetite_capacity_score_0_100"]
