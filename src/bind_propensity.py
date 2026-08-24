@@ -33,8 +33,30 @@ BIND_INGREDIENTS = [
 ]
 REGION_OPTIONS = ["Northeast", "Midwest", "Southeast", "West", "Southwest",
                    "Gulf Coast", "Mountain", "Pacific Northwest"]
+CHANNEL_OPTIONS = ["Broker", "Direct", "MGA"]  # "Broker" is the reference level
 NEW_BIND_INGREDIENTS = BIND_INGREDIENTS + ["total_insured_value_usd", "coverage_limit_requested_usd"] \
-    + [f"region_{r}" for r in REGION_OPTIONS[1:]]  # first region is the reference level
+    + [f"region_{r}" for r in REGION_OPTIONS[1:]] \
+    + [f"channel_{c}" for c in CHANNEL_OPTIONS[1:]]  # first level of each is the reference
+
+# real broker ID -> real tier, confirmed a clean 1:1 mapping (every one of the 60 brokers
+# carries exactly one tier across every submission they appear on, zero exceptions)
+KNOWN_BROKER_TIER = {
+    'BRK-1000': 'Bronze', 'BRK-1001': 'Gold', 'BRK-1002': 'Gold', 'BRK-1003': 'Silver',
+    'BRK-1004': 'Silver', 'BRK-1005': 'Bronze', 'BRK-1006': 'Silver', 'BRK-1007': 'Gold',
+    'BRK-1008': 'Bronze', 'BRK-1009': 'Gold', 'BRK-1010': 'Platinum', 'BRK-1011': 'Silver',
+    'BRK-1012': 'Silver', 'BRK-1013': 'Silver', 'BRK-1014': 'Silver', 'BRK-1015': 'Silver',
+    'BRK-1016': 'Gold', 'BRK-1017': 'Silver', 'BRK-1018': 'Bronze', 'BRK-1019': 'Gold',
+    'BRK-1020': 'Gold', 'BRK-1021': 'Platinum', 'BRK-1022': 'Silver', 'BRK-1023': 'Silver',
+    'BRK-1024': 'Gold', 'BRK-1025': 'Bronze', 'BRK-1026': 'Silver', 'BRK-1027': 'Gold',
+    'BRK-1028': 'Bronze', 'BRK-1029': 'Gold', 'BRK-1030': 'Silver', 'BRK-1031': 'Silver',
+    'BRK-1032': 'Silver', 'BRK-1033': 'Silver', 'BRK-1034': 'Bronze', 'BRK-1035': 'Silver',
+    'BRK-1036': 'Bronze', 'BRK-1037': 'Bronze', 'BRK-1038': 'Gold', 'BRK-1039': 'Platinum',
+    'BRK-1040': 'Platinum', 'BRK-1041': 'Bronze', 'BRK-1042': 'Silver', 'BRK-1043': 'Gold',
+    'BRK-1044': 'Silver', 'BRK-1045': 'Platinum', 'BRK-1046': 'Silver', 'BRK-1047': 'Bronze',
+    'BRK-1048': 'Silver', 'BRK-1049': 'Bronze', 'BRK-1050': 'Bronze', 'BRK-1051': 'Gold',
+    'BRK-1052': 'Silver', 'BRK-1053': 'Silver', 'BRK-1054': 'Silver', 'BRK-1055': 'Platinum',
+    'BRK-1056': 'Bronze', 'BRK-1057': 'Gold', 'BRK-1058': 'Platinum', 'BRK-1059': 'Bronze',
+}
 
 # real per-tier averages, used to auto-populate the fields no longer collected live -
 # computed directly from the source book, not guessed
@@ -79,14 +101,15 @@ def populate_broker_fields(df, broker_tier_col="broker_tier"):
 # fitted via verify_bind_formula() against bind_propensity_score_0_100 - rerun and replace
 # these if the source data changes
 BIND_COEFFICIENTS = {
-    "intercept": -251.8211, "broker_hit_bind_ratio_pct": 0.1484, "broker_renewal_retention_pct": 2.9662,
-    "broker_product_diversity_count": 0.9209, "broker_geo_diversity_count": 0.2898,
-    "broker_profitability_score_0_100": 0.1778, "quote_to_bind_days": -0.1001,
-    "competing_quotes_count": -2.0014, "submission_completeness_pct": 0.0017,
-    "total_insured_value_usd": -0.0, "coverage_limit_requested_usd": 0.0,
-    "region_Midwest": 0.1093, "region_Southeast": 0.0843, "region_West": 0.0489,
-    "region_Southwest": 0.0696, "region_Gulf Coast": -0.0, "region_Mountain": 0.1559,
-    "region_Pacific Northwest": 0.0207,
+    "intercept": -254.0043, "broker_hit_bind_ratio_pct": 0.1492, "broker_renewal_retention_pct": 2.9804,
+    "broker_product_diversity_count": 0.9249, "broker_geo_diversity_count": 0.2929,
+    "broker_profitability_score_0_100": 0.1758, "quote_to_bind_days": -0.1001,
+    "competing_quotes_count": -1.9915, "submission_completeness_pct": -0.0011,
+    "total_insured_value_usd": 0.0, "coverage_limit_requested_usd": -0.0,
+    "region_Midwest": 0.0517, "region_Southeast": 0.0545, "region_West": 0.0408,
+    "region_Southwest": 0.0562, "region_Gulf Coast": 0.0, "region_Mountain": 0.0138,
+    "region_Pacific Northwest": -0.0057,
+    "channel_Direct": 5.9778, "channel_MGA": 1.9851,
 }
 
 
@@ -94,11 +117,18 @@ def _build_design_matrix(df):
     X = df[BIND_INGREDIENTS].fillna(0).copy()
     X["total_insured_value_usd"] = df.get("total_insured_value_usd", pd.Series(0, index=df.index)).fillna(0)
     X["coverage_limit_requested_usd"] = df.get("coverage_limit_requested_usd", pd.Series(0, index=df.index)).fillna(0)
+    # explicit equality checks, not pd.get_dummies - get_dummies only creates a column for
+    # a category if it's actually PRESENT in the current batch, and drops whichever category
+    # is alphabetically first among what's present (not necessarily the intended reference
+    # level). That silently zeroed out Region and Channel's real effect on every single-row
+    # live submission score - found by testing Channel directly and seeing no score movement
+    # at all despite a real, non-zero fitted coefficient.
     region_source = df.get("risk_location_region", pd.Series(REGION_OPTIONS[0], index=df.index)).fillna(REGION_OPTIONS[0])
-    region_dummies = pd.get_dummies(region_source, prefix="region", drop_first=True)
     for r in REGION_OPTIONS[1:]:
-        col = f"region_{r}"
-        X[col] = region_dummies[col] if col in region_dummies.columns else 0
+        X[f"region_{r}"] = (region_source == r).astype(int)
+    channel_source = df.get("channel", pd.Series(CHANNEL_OPTIONS[0], index=df.index)).fillna(CHANNEL_OPTIONS[0])
+    for c in CHANNEL_OPTIONS[1:]:
+        X[f"channel_{c}"] = (channel_source == c).astype(int)
     return X[NEW_BIND_INGREDIENTS]
 
 
@@ -124,6 +154,12 @@ def compute_bind_propensity(df, coefficients):
     for col in X.columns:
         result = result + X[col] * coefficients[col]
     return result.clip(0, 100).round(1)
+
+
+def tier_for_known_broker(broker_id):
+    """Real tier for a broker already in the book - falls back to None if not found,
+    so the caller can fall back to the capacity-segment estimate instead."""
+    return KNOWN_BROKER_TIER.get(broker_id)
 
 
 if __name__ == "__main__":

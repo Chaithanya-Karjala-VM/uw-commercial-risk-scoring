@@ -1,5 +1,5 @@
 """
-Commercial UW Risk Intelligence - Streamlit app.
+Assisted Underwriting - Streamlit app.
 Three views (top tabs): Portfolio Overview, Executive Dashboard, Submission.
 Run: streamlit run streamlit_app.py
 """
@@ -12,10 +12,10 @@ import streamlit as st
 from data_loader import load_data
 from scoring import load_models, score
 from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, group_for_lob, STATE_TO_REGION
-from bind_propensity import NEW_BROKER_DEFAULT_TIER
+from bind_propensity import NEW_BROKER_DEFAULT_TIER, KNOWN_BROKER_TIER, tier_for_known_broker
 from decision_matrix_reference import RISK_TIER_ORDER, RISK_TIER_INFO
 
-st.set_page_config(page_title="Commercial UW Risk Intelligence", layout="wide")
+st.set_page_config(page_title="Assisted Underwriting", layout="wide")
 
 # ---------------------------------------------------------------------------
 # Palette, fonts, KPI card styling - built to react to the active theme (dark
@@ -128,7 +128,7 @@ with logo_col:
     if LOGO_PATH.exists():
         st.image(str(LOGO_PATH), width=170)
 with title_col:
-    st.markdown(f"<h1 style='margin-bottom:0;'>Commercial UW Risk Intelligence</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h1 style='margin-bottom:0;'>Assisted Underwriting</h1>", unsafe_allow_html=True)
     st.caption("Model-driven Loss Propensity scoring for commercial submissions")
 
 tab_submission, tab_portfolio, tab_dashboard = st.tabs(
@@ -489,18 +489,51 @@ with tab_submission:
                    "applies to any submission received, new business or renewal alike.")
 
         def _reset_tier_to_segment_default():
-            # widgets with a key only use their initial value once - after that, index=
-            # is silently ignored on rerun, so the tier default must be forced via an
-            # on_change callback instead, or it never actually updates when segment changes
             st.session_state["sub_broker_tier"] = NEW_BROKER_DEFAULT_TIER[st.session_state["sub_broker_segment"]]
 
-        lob_col, segment_col = st.columns(2)
+        def _reset_tier_to_known_broker():
+            broker_id = st.session_state["sub_broker_id"]
+            real_tier = tier_for_known_broker(broker_id)
+            if real_tier:
+                st.session_state["sub_broker_tier"] = real_tier
+
+        def _reset_tier_on_toggle():
+            # switching Existing<->New must also force-update tier immediately - same
+            # session_state-stickiness issue as segment/broker changes: without this,
+            # tier keeps whatever value it had from the OTHER path, which is wrong
+            if st.session_state["sub_is_existing_broker"] == "Yes - select broker":
+                broker_id = st.session_state.get("sub_broker_id", sorted(KNOWN_BROKER_TIER.keys())[0])
+                real_tier = tier_for_known_broker(broker_id)
+                if real_tier:
+                    st.session_state["sub_broker_tier"] = real_tier
+            else:
+                segment = st.session_state.get("sub_broker_segment", "Large National")
+                st.session_state["sub_broker_tier"] = NEW_BROKER_DEFAULT_TIER[segment]
+
+        lob_col, channel_col = st.columns(2)
         lob = lob_col.selectbox("Line of Business", LOB_OPTIONS, key="sub_lob")
-        broker_segment = segment_col.selectbox(
-            "Broker Capacity Segment", ["Large National", "Regional", "Small Independent"],
-            key="sub_broker_segment", on_change=_reset_tier_to_segment_default,
-            help="For a new broker relationship. Broker Tier below defaults to the typical "
-                 "tier for this segment, and can be changed if the actual tier is known.")
+        channel = channel_col.selectbox("Channel", ["Broker", "Direct", "MGA"], key="sub_channel")
+
+        is_existing_broker = st.radio(
+            "Is this an existing broker relationship?", ["No - new broker", "Yes - select broker"],
+            key="sub_is_existing_broker", on_change=_reset_tier_on_toggle, horizontal=True
+        ) == "Yes - select broker"
+
+        if is_existing_broker:
+            broker_id = st.selectbox(
+                "Broker", sorted(KNOWN_BROKER_TIER.keys()), key="sub_broker_id",
+                on_change=_reset_tier_to_known_broker,
+                help="Broker Tier below auto-fills with this broker's real, on-file tier.")
+            st.session_state.setdefault("sub_broker_tier", tier_for_known_broker(broker_id))
+            broker_segment = None
+        else:
+            broker_segment = st.selectbox(
+                "Broker Capacity Segment", ["Large National", "Regional", "Small Independent"],
+                key="sub_broker_segment", on_change=_reset_tier_to_segment_default,
+                help="Broker Tier below defaults to the typical tier for this segment, and "
+                     "can be changed if the actual tier is known.")
+            st.session_state.setdefault("sub_broker_tier", NEW_BROKER_DEFAULT_TIER[broker_segment])
+
         group = group_for_lob(lob)
         is_property = group == "property"
         st.caption(
@@ -566,11 +599,9 @@ with tab_submission:
             with col4:
                 st.markdown("**Broker**")
                 tier_options = ["Platinum", "Gold", "Silver", "Bronze"]
-                st.session_state.setdefault("sub_broker_tier", NEW_BROKER_DEFAULT_TIER[broker_segment])
                 broker_tier = st.selectbox(
                     "Broker Tier", tier_options, key="sub_broker_tier",
-                    help=f"Defaults to the typical tier for {broker_segment}. "
-                         f"Change this if the broker's actual tier is already known.")
+                    help="Auto-filled above; change here if the actual tier differs from the default.")
                 competing_quotes_count = st.number_input("Competing Quotes Count", 0, 10, 2)
                 risk_state = st.selectbox("State", sorted(STATE_TO_REGION.keys()), index=sorted(STATE_TO_REGION.keys()).index("CA"))
                 coverage_limit_requested_usd = st.number_input("Coverage Limit Requested ($)", 50000, 50000000, 500000, step=10000)
@@ -628,7 +659,7 @@ with tab_submission:
                 "safety_inspection_findings": safety_inspection_findings,
                 "business_tenure_years": business_tenure_years, "revenue_growth_trend_pct": revenue_growth_trend_pct,
                 "debt_to_equity_ratio": debt_to_equity_ratio, "policy_term_months": policy_term_months,
-                "broker_tier": broker_tier, "competing_quotes_count": competing_quotes_count,
+                "broker_tier": broker_tier, "channel": channel, "competing_quotes_count": competing_quotes_count,
                 "risk_state": risk_state, "coverage_limit_requested_usd": coverage_limit_requested_usd,
                 "sanctions_ofac_watchlist_flag": int(sanctions_flag),
                 "prior_insolvency_bankruptcy_flag": int(insolvency_flag),
