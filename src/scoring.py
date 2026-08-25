@@ -9,7 +9,8 @@ from scipy import stats
 import joblib
 from lob_config import group_for_lob, encode_ordinal_tiers, region_for_state
 from bind_propensity import compute_bind_propensity, populate_broker_fields, BIND_COEFFICIENTS
-from appetite_capacity import compute_appetite_capacity_score, hard_rule_pass
+from appetite_capacity import compute_appetite_capacity_score, compute_appetite_decision, hard_rule_pass
+from decision_matrix_reference import tier_for_score, RISK_TIER_INFO
 
 # fitted appetite coefficients - see appetite_capacity.verify_appetite_formula() docstring
 # for how these were derived and re-verify if the source data changes
@@ -32,6 +33,11 @@ PREMIUM_RATE_BY_LOB = {
     "General Liability": 0.002230, "Professional Liability": 0.001734,
     "Umbrella/Excess": 0.001372, "Commercial Auto": 0.001348,
 }
+# fallback only - used if a submission's line_of_business isn't one of the 8 rates above
+# (e.g. a genuinely new LOB the book has never seen). Previously a plain dict lookup that
+# raised KeyError and crashed scoring outright; this keeps scoring alive with a reasonable
+# blended estimate instead.
+BOOK_AVG_PREMIUM_RATE = sum(PREMIUM_RATE_BY_LOB.values()) / len(PREMIUM_RATE_BY_LOB)
 PROPERTY_LOBS = ["Commercial Property", "Business Owners Package (BOP)", "Inland Marine"]
 
 
@@ -52,11 +58,64 @@ def _prep_X(sub_df, cat_cols):
 
 def compute_premium(lob, total_insured_value_usd=None, number_of_employees=None,
                      avg_wage_per_employee_usd=None):
-    rate = PREMIUM_RATE_BY_LOB[lob]
+    rate = PREMIUM_RATE_BY_LOB.get(lob, BOOK_AVG_PREMIUM_RATE)
     if lob in PROPERTY_LOBS:
         return round((total_insured_value_usd or 0) * rate, -1)
     payroll = (number_of_employees or 0) * (avg_wage_per_employee_usd or 0)
     return round(payroll * rate, -1)
+
+
+# real, honest indicators a submission can carry BEFORE any claim shows up in its history -
+# used for the Emerging Risk Watch List. Replaces the source file's own prospective_risk_flags/
+# prospective_risk_flag_count, which are frozen values from the original stored formula and
+# can't be regenerated for a brand-new submission or reflect anything from this pipeline.
+WATCH_FLAG_DEFINITIONS = [
+    ("Low financial stability score", lambda r: (r.get("financial_stability_score") or 100) < 40),
+    ("High debt-to-equity ratio", lambda r: (r.get("debt_to_equity_ratio") or 0) > 2.0),
+    ("Declining revenue trend", lambda r: (r.get("revenue_growth_trend_pct") or 0) < -5),
+    ("Short business tenure (<3 yrs)", lambda r: (r.get("business_tenure_years") or 100) < 3),
+    ("Safety inspection deficiencies noted", lambda r: r.get("safety_inspection_findings") in
+        ("Moderate Issues – Corrective Action Required", "Major Deficiencies Identified")),
+    ("Severe CAT zone exposure", lambda r: any(
+        (r.get(c) or 0) >= 3 for c in ["flood_zone_tier", "earthquake_zone_tier", "wildfire_zone_tier", "wind_zone_tier"])),
+    ("High competing-quote pressure", lambda r: (r.get("competing_quotes_count") or 0) >= 5),
+]
+
+
+def _watch_flags(row):
+    hits = [label for label, test in WATCH_FLAG_DEFINITIONS if test(row)]
+    return len(hits), "; ".join(hits) if hits else "None"
+
+
+def _decline_review_reason(row):
+    if row["appetite_capacity_score_v2"] == 0:
+        return ("Fails compliance/appetite hard-rule gate (sanctions, insolvency, restricted "
+                "operations, or region/LOB restriction) - decline regardless of loss or bind view")
+    concerns = []
+    if row["loss_propensity_score_v2"] >= 60:
+        concerns.append(f"elevated loss propensity (predicted loss ratio {row['predicted_loss_ratio_pct']:.0f}%)")
+    if row["appetite_capacity_score_v2"] < 45:
+        concerns.append("below-average appetite/capacity fit")
+    if row["bind_propensity_score_v2"] < 35:
+        concerns.append("lower likelihood to bind")
+    if not concerns:
+        return "Balanced profile - no single dominant concern, refer for underwriter judgment"
+    text = "; ".join(concerns)
+    return text[0].upper() + text[1:]
+
+
+def _priority_strength_reason(row):
+    strengths = []
+    if row["loss_propensity_score_v2"] <= 25:
+        strengths.append("strong loss profile")
+    if row["bind_propensity_score_v2"] >= 50:
+        strengths.append("high likelihood to bind")
+    if row["appetite_capacity_score_v2"] >= 65:
+        strengths.append("strong appetite/capacity fit")
+    if not strengths:
+        return "Solid overall profile, within appetite"
+    text = ", ".join(strengths)
+    return text[0].upper() + text[1:]
 
 
 def score(df, models, term_col="policy_term_months"):
@@ -102,7 +161,14 @@ def score(df, models, term_col="policy_term_months"):
         freq_saved = models["frequency"][group]
         Xf = _prep_X(sub[freq_saved["features"]], freq_saved["cat_cols"])
         exposure_years = (sub[term_col] / 12).clip(lower=0.01)
-        predicted_frequency = freq_saved["model"].predict(Xf) * exposure_years
+        # frequency_model.py now predicts a PER-EXPOSURE-UNIT rate (added 2026-08 - see that
+        # file's module docstring), so the model's raw output has to be multiplied by both
+        # exposure_years AND the exposure unit itself to recover an actual predicted claim
+        # count - multiplying by exposure_years alone (the old behavior) understated it by
+        # however large the unit value was.
+        unit_cfg = freq_saved["exposure_unit"]
+        exposure_units = (sub[unit_cfg["col"]] / unit_cfg["scale"]).clip(lower=unit_cfg["floor"])
+        predicted_frequency = freq_saved["model"].predict(Xf) * exposure_years * exposure_units
 
         sev_saved = models["severity"][group]
         Xs = _prep_X(sub[sev_saved["features"]], sev_saved["cat_cols"])
@@ -111,11 +177,25 @@ def score(df, models, term_col="policy_term_months"):
         large_saved = models["large_loss"][group]
         Xl = _prep_X(sub[large_saved["features"]], large_saved["cat_cols"])
         p_large = large_saved["occurrence_model"].predict_proba(Xl)[:, 1]
-        threshold_by_lob = sub["line_of_business"].map(models["large_loss"]["thresholds_by_lob"])
+        # .fillna(): a LOB the large-loss model has never seen (not in thresholds_by_lob) used
+        # to leave this as NaN, which silently poisoned every downstream number for that row
+        # (expected_large_severity, total_expected_loss_cost, the final score - all NaN, no
+        # error). Falls back to the MEDIAN THRESHOLD WITHIN THIS SAME GROUP ONLY (property
+        # thresholds are PML/TIV-based and run far higher $ than liability's AOA-based ones -
+        # blending both scales together would make the fallback meaningless either direction).
+        group_thresholds = {lob: v for lob, v in models["large_loss"]["thresholds_by_lob"].items()
+                             if group_for_lob(lob) == group}
+        group_median_threshold = pd.Series(group_thresholds).median()
+        threshold_by_lob = sub["line_of_business"].map(models["large_loss"]["thresholds_by_lob"]) \
+            .fillna(group_median_threshold)
         gpd_mean_excess = stats.genpareto.mean(large_saved["gpd_shape"], scale=large_saved["gpd_scale"])
         flat_large_severity = threshold_by_lob + gpd_mean_excess
 
-        lob_avg = sub["line_of_business"].map(models["severity"]["lob_avg_severity"])
+        # same NaN-on-unknown-LOB risk as threshold_by_lob above, and the same group-scoped fix
+        group_avg_severities = {lob: v for lob, v in models["severity"]["lob_avg_severity"].items()
+                                 if group_for_lob(lob) == group}
+        lob_avg = sub["line_of_business"].map(models["severity"]["lob_avg_severity"]) \
+            .fillna(pd.Series(group_avg_severities).median())
         severity_ratio = (predicted_attritional_severity / lob_avg).clip(0.3, 3.0)
         expected_large_severity = flat_large_severity * severity_ratio
 
@@ -152,5 +232,18 @@ def score(df, models, term_col="policy_term_months"):
         0.30 * out["appetite_capacity_score_v2"] + 0.20 * out["bind_propensity_score_v2"]
         + 0.50 * (100 - out["loss_propensity_score_v2"]), 1
     )
+
+    # decision-layer outputs, all derived live from the v2 scores above - NOT the source
+    # file's frozen original columns (risk_tier, appetite_capacity_decision, etc.), which
+    # never move no matter what changes in the scoring pipeline. See scoring.py's module
+    # docstring / project notes for why that distinction matters.
+    out["risk_tier_v2"] = out["uw_score_v2"].apply(tier_for_score)
+    out["appetite_capacity_decision_v2"] = compute_appetite_decision(out, APPETITE_FIT_COEFFICIENTS)
+    out["recommended_uw_action_v2"] = out["risk_tier_v2"].map(lambda t: RISK_TIER_INFO[t]["uw_action"])
+    out["decline_review_reason_v2"] = out.apply(_decline_review_reason, axis=1)
+    out["priority_strength_reason_v2"] = out.apply(_priority_strength_reason, axis=1)
+    watch = out.apply(_watch_flags, axis=1, result_type="expand")
+    out["prospective_risk_flag_count_v2"] = watch[0]
+    out["prospective_risk_flags_v2"] = watch[1]
 
     return out.drop(columns=["_group"])

@@ -5,6 +5,19 @@ Dashboard sheet content exactly (verified against the source file's own formulas
 
 RISK_TIER_ORDER = ["Preferred", "Standard", "High", "Decline"]
 
+# machine-usable version of the bands above (text-only until now, e.g. "55 - 71") - single
+# source of truth for the numeric cutoffs, so scoring.py, the dashboard, and any future caller
+# all classify a uw_score_v2 into a tier the exact same way, instead of each hardcoding 72/55/38
+RISK_TIER_CUTOFFS = [(72, "Preferred"), (55, "Standard"), (38, "High"), (0, "Decline")]
+
+
+def tier_for_score(uw_score):
+    for cutoff, tier in RISK_TIER_CUTOFFS:
+        if uw_score >= cutoff:
+            return tier
+    return "Decline"
+
+
 RISK_TIER_INFO = {
     "Preferred": {
         "uw_score_band": "≥ 72",

@@ -11,13 +11,22 @@ Notes on feature selection:
     distance_to_fire_station/hydrant, business_tenure_years, revenue_growth_trend_pct,
     debt_to_equity_ratio, avg_weekly_work_hours (WC-specific).
 """
+from datetime import date
 
 PROPERTY_LOBS = ["Commercial Property", "Business Owners Package (BOP)", "Inland Marine"]
 LIABILITY_LOBS = ["Workers Compensation", "General Liability", "Professional Liability",
                    "Umbrella/Excess", "Commercial Auto"]
+ALL_LOBS = PROPERTY_LOBS + LIABILITY_LOBS  # closed set the models were trained on - anything
+                                            # outside this list is genuinely new to the system
 
 PROPERTY_ONLY_FEATURES = [
-    "year_built", "building_age_years", "built_to_current_code_flag", "construction_type",
+    # year_built is deliberately NOT included as a model feature (it's still a live form
+    # input) - it's deterministically redundant with building_age_years (correlation
+    # -0.9999999999999999 in the real book, confirmed 2026-08), and having both fed to the
+    # model as separate features was pure multicollinearity causing exactly the kind of erratic,
+    # non-monotonic behavior found across an 8-LOB audit. building_age_years alone (already
+    # monotonically constrained) carries the same information cleanly.
+    "building_age_years", "built_to_current_code_flag", "construction_type",
     "num_stories", "square_footage", "roof_age_years", "roof_type", "sprinklered_flag",
     "fire_protection_class_iso_ppc", "distance_to_fire_station_miles",
     "distance_to_fire_hydrant_miles", "fire_alarm_monitoring_type",
@@ -25,7 +34,18 @@ PROPERTY_ONLY_FEATURES = [
     "distance_to_coast_miles", "earthquake_zone_tier", "distance_to_fault_line_miles",
     "soil_liquefaction_class", "wildfire_zone_tier", "wind_zone_tier",
     "total_insured_value_usd", "occupancy_type",
+    # added 2026-08: chi-square tested against large_claim_flag specifically (property),
+    # p=0.008 - genuinely significant, unlike every other untested categorical field checked
+    # (business_description, occupancy_type-alone, industry, water-body-type, region all came
+    # back p>0.05 - noise from thin per-category counts on a rare target). This one carries
+    # real, distinct signal from the existing zone-tier fields: it names the peril TYPE
+    # directly (Wildfire / Flood-Storm Surge / Earthquake / Wind-Hail / Elevated-Multiple
+    # Perils / Low-Minimal) rather than a severity tier per peril, which the tier fields
+    # already cover from a different angle.
+    "primary_cat_peril_exposure",
 ]
+PRIMARY_CAT_PERIL_OPTIONS = ["Low/Minimal CAT Exposure", "Flood/Storm Surge", "Wildfire",
+                             "Earthquake", "Wind/Hail", "Elevated — Multiple Perils"]
 
 LIABILITY_ONLY_FEATURES = [
     "industry_class_naics", "number_of_employees", "avg_wage_per_employee_usd",
@@ -94,3 +114,10 @@ STATE_TO_REGION = {
 
 def region_for_state(state):
     return STATE_TO_REGION.get(state, "Midwest")  # fallback to the most common region
+
+
+# Single source for "today" across the whole app - was previously hand-typed as the literal
+# number 2026 in three separate places (Submission form's max Year Built, the building-age
+# calculation, and a test boundary value). That rots the instant the calendar turns over;
+# importing this everywhere means the app is never wrong about what year it is.
+CURRENT_YEAR = date.today().year

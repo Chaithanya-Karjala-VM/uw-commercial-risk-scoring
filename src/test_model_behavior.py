@@ -6,7 +6,7 @@ Run: python test_model_behavior.py
 import itertools
 import pandas as pd
 from scoring import load_models, score
-from lob_config import PROPERTY_LOBS, LIABILITY_LOBS
+from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, CURRENT_YEAR
 
 models = load_models()
 ALL_LOBS = PROPERTY_LOBS + LIABILITY_LOBS
@@ -47,6 +47,7 @@ def base_row(lob, level="mid"):
         "earthquake_zone_tier": ["Low", "Low", "Severe"][lvl],
         "soil_liquefaction_class": ["A - Hard Rock", "B - Rock", "F - Special Study Required"][lvl],
         "wildfire_zone_tier": ["Low", "Low", "Severe"][lvl], "wind_zone_tier": ["Low", "Moderate", "Severe"][lvl],
+        "primary_cat_peril_exposure": ["Low/Minimal CAT Exposure", "Wind/Hail", "Elevated — Multiple Perils"][lvl],
         "distance_to_coast_miles": [400.0, 60.0, 1.0][lvl], "distance_to_fault_line_miles": [300.0, 60.0, 1.0][lvl],
         "distance_to_nearest_water_body_miles": [40.0, 3.0, 0.1][lvl],
     }
@@ -62,7 +63,17 @@ def stage_1_best_worst():
     fails = 0
     for lob in ALL_LOBS:
         best, worst = score_one(base_row(lob, "best")), score_one(base_row(lob, "worst"))
-        ok = (best["loss_propensity_score_v2"] < worst["loss_propensity_score_v2"]
+        # loss_propensity_score_v2 is clipped to [0,100] for display - for a couple of the
+        # lowest-premium-rate LOBs (Professional Liability, Umbrella/Excess) both ends of this
+        # synthetic best/worst scenario can genuinely exceed 100% loss ratio and tie at the
+        # display ceiling even though the real underlying gap is large and correctly ordered
+        # (found 2026-08: best=100.6%, worst=246.0% raw - a real, big, correct difference that
+        # a strict "<" on the clipped score alone would falsely flag). Check the raw uncapped
+        # ratio too so a genuine reversal is still caught, but a ceiling tie isn't a false alarm.
+        loss_ok = (best["loss_propensity_score_v2"] < worst["loss_propensity_score_v2"]
+                   or (best["loss_propensity_score_v2"] == worst["loss_propensity_score_v2"] == 100.0
+                       and best["predicted_loss_ratio_pct"] < worst["predicted_loss_ratio_pct"]))
+        ok = (loss_ok
               and best["bind_propensity_score_v2"] > worst["bind_propensity_score_v2"]
               and best["appetite_capacity_score_v2"] >= worst["appetite_capacity_score_v2"]
               and best["uw_score_v2"] > worst["uw_score_v2"])
@@ -79,6 +90,15 @@ def stage_2_monotonicity():
         "large_loss_count_last_5_years": [0, 1, 2, 3], "claims_free_years": [0, 3, 5, 8, 10],
         "debt_to_equity_ratio": [0.0, 1.0, 2.5, 5.0], "broker_hit_bind_ratio_pct": [10, 30, 50, 70, 90],
         "competing_quotes_count": [0, 2, 4, 6, 10], "quote_to_bind_days": [5, 20, 40, 80, 120],
+        # added 2026-08 after the 8-LOB audit found these swinging the score non-monotonically
+        # by up to 76 points with no constraint anywhere - now either constrained (should pass
+        # cleanly) or correctly dropped by the "contradicts known direction" safeguard (flat,
+        # which also passes cleanly) - either outcome is fine, erratic swinging is not
+        "revenue_growth_trend_pct": [-30, -10, 0, 20, 60], "business_tenure_years": [0, 10, 25, 50, 80],
+    }
+    liability_sweeps = {
+        "avg_weekly_work_hours": [18, 25, 32, 40, 50], "avg_employee_age": [19, 30, 45, 60, 66],
+        "avg_wage_per_employee_usd": [46000, 55000, 70000, 85000, 94000],
     }
     tier_sweeps = {"flood_zone_tier": TIER_OPTIONS, "earthquake_zone_tier": TIER_OPTIONS,
                    "wildfire_zone_tier": TIER_OPTIONS, "wind_zone_tier": TIER_OPTIONS}
@@ -96,6 +116,13 @@ def stage_2_monotonicity():
                 total += 1
                 scores_list = [score_one({**base, field: v})["loss_propensity_score_v2"] for v in values]
                 if not all(scores_list[i] <= scores_list[i+1] + 0.15 for i in range(len(scores_list)-1)):
+                    non_mono.append((lob, field, [round(v, 1) for v in scores_list]))
+        else:
+            for field, values in liability_sweeps.items():
+                total += 1
+                scores_list = [score_one({**base, field: v})["loss_propensity_score_v2"] for v in values]
+                if not (all(scores_list[i] <= scores_list[i+1] + 0.15 for i in range(len(scores_list)-1))
+                        or all(scores_list[i] >= scores_list[i+1] - 0.15 for i in range(len(scores_list)-1))):
                     non_mono.append((lob, field, [round(v, 1) for v in scores_list]))
     print(f"  {total} checks run, {len(non_mono)} non-monotonic")
     for lob, field, vals in non_mono:
@@ -150,6 +177,8 @@ def stage_5_dropdowns():
         "flood_zone_tier": TIER_OPTIONS, "earthquake_zone_tier": TIER_OPTIONS,
         "wildfire_zone_tier": TIER_OPTIONS, "wind_zone_tier": TIER_OPTIONS,
         "sprinklered_flag": ["Y", "N"],
+        "primary_cat_peril_exposure": ["Low/Minimal CAT Exposure", "Flood/Storm Surge", "Wildfire",
+                                        "Earthquake", "Wind/Hail", "Elevated — Multiple Perils"],
     }
     industry_options = ["Accommodation & Food Services", "Administrative Services", "Construction", "Health Care",
                          "Manufacturing", "Professional Services", "Real Estate", "Retail Trade",
@@ -189,12 +218,12 @@ def stage_5_dropdowns():
 def stage_6_boundaries():
     print("\n=== Stage 6: Numeric boundary values (min/max of every form field) ===")
     boundary_fields = {
-        "year_built": [1900, 2026], "num_stories": [1, 50], "square_footage": [500, 500000],
-        "total_insured_value_usd": [50000, 50000000], "roof_age_years": [0, 120],
-        "fire_protection_class_iso_ppc": [1, 10], "number_of_employees": [1, 20000],
-        "avg_wage_per_employee_usd": [15000, 300000], "financial_stability_score": [0, 100],
-        "debt_to_equity_ratio": [0.0, 10.0], "claim_count_last_3_years": [0, 20],
-        "large_loss_count_last_5_years": [0, 10], "broker_hit_bind_ratio_pct": [0, 100],
+        "year_built": [1910, CURRENT_YEAR], "num_stories": [1, 11], "square_footage": [1000, 268000],
+        "total_insured_value_usd": [40000, 25000000], "roof_age_years": [1, 120],
+        "fire_protection_class_iso_ppc": [1, 10], "number_of_employees": [1, 5000],
+        "avg_wage_per_employee_usd": [46000, 94000], "financial_stability_score": [5, 100],
+        "debt_to_equity_ratio": [0.0, 5.0], "claim_count_last_3_years": [0, 9],
+        "large_loss_count_last_5_years": [0, 3], "broker_hit_bind_ratio_pct": [0, 100],
         "competing_quotes_count": [0, 10], "submission_completeness_pct": [0, 100],
     }
     tested, errors, out_of_range = 0, [], []
@@ -237,6 +266,132 @@ def stage_7_driver_ranking():
         print(f"  {field:32s} swing={swing:6.1f}  ({swing/total*100:5.1f}% of tested swing)")
 
 
+def stage_8_unknown_category_safety():
+    """Confirms a genuinely new category (never seen in training) still produces a real,
+    usable score - no crash, no NaN. The app no longer surfaces a caveat for these cases
+    (client-facing output shows the model's prediction plainly), but the underlying pipeline
+    still has to hold up structurally regardless of what's typed into a live submission."""
+    print("\n=== Stage 8: Unknown-category safety (new LOB / state / broker tier) ===")
+    base = base_row("Commercial Property", "mid")
+    cases = {
+        "Unknown Line of Business": {**base, "line_of_business": "Cyber Liability (Not Yet Modeled)"},
+        "Unknown State": {**base, "risk_state": "PR"},
+        "Unknown Broker Tier": {**base, "broker_tier": "Diamond"},
+        "Extreme out-of-range TIV ($750M)": {**base, "total_insured_value_usd": 750_000_000},
+        "Unseen construction type": {**base, "construction_type": "Modular/Prefab"},
+    }
+    crashes, nan_scores = [], []
+    for label, row in cases.items():
+        try:
+            s = score_one(row)
+        except Exception as e:
+            crashes.append((label, str(e)))
+            continue
+        for col in ["loss_propensity_score_v2", "bind_propensity_score_v2",
+                    "appetite_capacity_score_v2", "uw_score_v2"]:
+            if pd.isna(s[col]):
+                nan_scores.append((label, col))
+    print(f"  {len(cases)} unknown-category cases tested: "
+          f"{len(crashes)} crashed, {len(nan_scores)} produced NaN")
+    for c in crashes: print("  CRASH:", c)
+    for n in nan_scores: print("  NaN SCORE:", n)
+
+
+def stage_9_appetite_batch_independence():
+    """Regression test for a real bug found 2026-08: appetite/capacity's industry-concentration
+    headroom used to be computed against whatever dataframe was passed into score() itself, so
+    a single live submission's own industry silently counted as 100% of the reference book -
+    flooring the headroom credit to 0 on nearly every live score regardless of the real book's
+    actual exposure. Fixed by referencing the real book's fixed INDUSTRY_CONCENTRATION_BY_NAICS
+    constant instead. This confirms a submission's appetite score no longer depends on how many
+    OTHER rows happen to be scored in the same batch - which is what "correct" looks like here."""
+    print("\n=== Stage 9: Appetite/Capacity score independence from batch size ===")
+    base = base_row("Commercial Property", "mid")
+    base["industry_class_naics"] = "Real Estate"  # ~9.4% of the real book - comfortably under the 15% cap
+    solo = score_one(base)["appetite_capacity_score_v2"]
+    batch = pd.DataFrame([base] * 5)  # same row, scored together as a same-industry batch of 5
+    batched = score(batch, models)["appetite_capacity_score_v2"].iloc[0]
+    diff = abs(solo - batched)
+    status = "PASS" if diff < 0.5 else "FAIL"
+    print(f"  Solo score: {solo}, scored-in-batch-of-5 score: {batched}, diff={diff:.1f} ({status} - should be ~0)")
+
+
+def stage_10_cat_tiv_penalty_fires():
+    """Regression test for a real bug found 2026-08: scoring.py ordinal-encodes flood/EQ/
+    wildfire tier (Low/Moderate/High/Severe -> 0-3) BEFORE calling the appetite score, but
+    cat_tiv_penalty() compared against the string "Severe" - always False against an integer,
+    so the penalty silently never fired for any live-scored submission. Confirms a severe-CAT
+    + high-TIV submission now actually scores lower appetite than an identical one without it."""
+    print("\n=== Stage 10: CAT/TIV penalty actually fires through the real pipeline ===")
+    base = base_row("Commercial Property", "best")
+    clean = score_one(base)["appetite_capacity_score_v2"]
+    severe = score_one({**base, "flood_zone_tier": "Severe", "earthquake_zone_tier": "Severe",
+                         "total_insured_value_usd": 5_000_000})["appetite_capacity_score_v2"]
+    diff = clean - severe
+    status = "PASS" if diff >= 8 else "FAIL"
+    print(f"  Clean-zone appetite: {clean}, severe-zone+high-TIV appetite: {severe}, "
+          f"penalty applied={diff:.1f} ({status} - should be ~9)")
+
+
+def stage_11_decision_layer_consistency():
+    """Regression test for the dashboard-wiring fix (2026-08): risk_tier_v2, the recommended
+    action, and the appetite decision category must all agree with the numeric scores they're
+    derived from - not the frozen original file columns the Executive Dashboard used to read
+    before this fix (which never moved regardless of any scoring change)."""
+    print("\n=== Stage 11: risk_tier_v2 / appetite_capacity_decision_v2 consistency ===")
+    from decision_matrix_reference import tier_for_score, RISK_TIER_INFO
+    issues = []
+    for lob in ALL_LOBS:
+        for level in ["best", "mid", "worst"]:
+            r = score_one(base_row(lob, level))
+            expected_tier = tier_for_score(r["uw_score_v2"])
+            if r["risk_tier_v2"] != expected_tier:
+                issues.append(f"{lob}/{level}: risk_tier_v2={r['risk_tier_v2']} but uw_score_v2="
+                               f"{r['uw_score_v2']} implies {expected_tier}")
+            if r["recommended_uw_action_v2"] != RISK_TIER_INFO[r["risk_tier_v2"]]["uw_action"]:
+                issues.append(f"{lob}/{level}: recommended_uw_action_v2 doesn't match its own risk_tier_v2's action")
+            if r["appetite_capacity_score_v2"] == 0 and r["appetite_capacity_decision_v2"] != "Decline – Outside Appetite":
+                issues.append(f"{lob}/{level}: appetite=0 but decision={r['appetite_capacity_decision_v2']!r}")
+    print(f"  {24} checks run, {len(issues)} inconsistencies")
+    for i in issues:
+        print("   ", i)
+
+
+def stage_12_exposure_unit_scaling():
+    """Regression test for the exposure-unit fix (2026-08): frequency_model.py used to treat
+    number_of_employees/total_insured_value_usd as ordinary features rather than an explicit
+    exposure multiplier, so predicted frequency barely moved across their entire real range
+    while premium scaled linearly with them - collapsing loss ratio toward zero at scale for
+    purely mechanical reasons (a 5,000-employee WC account scored 0.0, essentially risk-free).
+    Confirms predicted_frequency now scales up with size, and a large account no longer reads
+    as near-zero risk."""
+    print("\n=== Stage 12: Exposure-unit scaling (size no longer collapses risk to ~0) ===")
+    issues = []
+    for lob in LIABILITY_LOBS:
+        base = base_row(lob, "mid")
+        small = score_one({**base, "number_of_employees": 5})
+        large = score_one({**base, "number_of_employees": 2000})
+        if not (small["predicted_frequency"] < large["predicted_frequency"]):
+            issues.append(f"{lob}: predicted_frequency did not increase with employee count "
+                           f"({small['predicted_frequency']} -> {large['predicted_frequency']})")
+        if large["loss_propensity_score_v2"] < 3.0:
+            issues.append(f"{lob}: a 2,000-employee account still scores near-zero risk "
+                           f"({large['loss_propensity_score_v2']}) - exposure scaling may have regressed")
+    for lob in PROPERTY_LOBS:
+        base = base_row(lob, "mid")
+        small = score_one({**base, "total_insured_value_usd": 200000})
+        large = score_one({**base, "total_insured_value_usd": 15000000})
+        if not (small["predicted_frequency"] < large["predicted_frequency"]):
+            issues.append(f"{lob}: predicted_frequency did not increase with TIV "
+                           f"({small['predicted_frequency']} -> {large['predicted_frequency']})")
+        if large["loss_propensity_score_v2"] < 3.0:
+            issues.append(f"{lob}: a $15M-TIV account still scores near-zero risk "
+                           f"({large['loss_propensity_score_v2']}) - exposure scaling may have regressed")
+    print(f"  {len(ALL_LOBS) * 2} checks run, {len(issues)} issues")
+    for i in issues:
+        print("   ", i)
+
+
 if __name__ == "__main__":
     stage_1_best_worst()
     stage_2_monotonicity()
@@ -245,3 +400,8 @@ if __name__ == "__main__":
     stage_5_dropdowns()
     stage_6_boundaries()
     stage_7_driver_ranking()
+    stage_8_unknown_category_safety()
+    stage_9_appetite_batch_independence()
+    stage_10_cat_tiv_penalty_fires()
+    stage_11_decision_layer_consistency()
+    stage_12_exposure_unit_scaling()

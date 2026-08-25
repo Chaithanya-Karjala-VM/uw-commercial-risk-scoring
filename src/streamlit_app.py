@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from data_loader import load_data
 from scoring import load_models, score
-from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, group_for_lob, STATE_TO_REGION
+from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, group_for_lob, STATE_TO_REGION, CURRENT_YEAR, PRIMARY_CAT_PERIL_OPTIONS
 from bind_propensity import NEW_BROKER_DEFAULT_TIER, KNOWN_BROKER_TIER, tier_for_known_broker
 from decision_matrix_reference import RISK_TIER_ORDER, RISK_TIER_INFO
 
@@ -80,12 +80,7 @@ def get_raw_book():
 def get_scored_book():
     df = get_raw_book()
     models = get_models()
-    scored = score(df, models)
-    scored["loss_only_tier_v2"] = pd.cut(
-        scored["loss_propensity_score_v2"], bins=[-1, 25, 50, 75, 101],
-        labels=["Preferred", "Standard", "High", "Decline"]
-    )
-    return scored
+    return score(df, models)  # risk_tier_v2 etc. are computed inside score() itself now
 
 
 models = get_models()
@@ -202,7 +197,7 @@ with tab_dashboard:
         fb = book.copy()
         if lob_f != "All": fb = fb[fb["line_of_business"] == lob_f]
         if occ_f != "All": fb = fb[fb["occupancy_type"] == occ_f]
-        if tier_f != "All": fb = fb[fb["risk_tier"] == tier_f]
+        if tier_f != "All": fb = fb[fb["risk_tier_v2"] == tier_f]
         if broker_f != "All": fb = fb[fb["broker_tier"] == broker_f]
         if renewal_f != "All": fb = fb[fb["renewal_flag"] == renewal_f]
 
@@ -211,8 +206,8 @@ with tab_dashboard:
         k1, k2, k3, k4, k5 = st.columns(5)
         k1.metric("Submissions", f"{len(fb):,}")
         k2.metric("Total Premium", f"${fb['indicated_annual_premium_usd'].sum()/1e6:.1f}M" if len(fb) else "$0")
-        k3.metric("Avg Loss Propensity", f"{fb['loss_propensity_score_0_100'].mean():.1f}" if len(fb) else "-")
-        needs_review = (fb["risk_tier"].isin(["High", "Decline"])).sum() if len(fb) else 0
+        k3.metric("Avg Loss Propensity", f"{fb['loss_propensity_score_v2'].mean():.1f}" if len(fb) else "-")
+        needs_review = (fb["risk_tier_v2"].isin(["High", "Decline"])).sum() if len(fb) else 0
         k4.metric("Needs Review", f"{needs_review:,}", help="High + Decline tier count")
         k5.metric("Large-Loss Count", f"{fb['large_claim_flag'].sum():,}" if len(fb) else "0")
 
@@ -221,17 +216,17 @@ with tab_dashboard:
         if len(fb):
             matrix_rows = []
             for tier in RISK_TIER_ORDER:
-                tb = fb[fb["risk_tier"] == tier]
+                tb = fb[fb["risk_tier_v2"] == tier]
                 info = RISK_TIER_INFO[tier]
                 matrix_rows.append({
                     "Risk Tier": tier,
                     "Opportunity Premium": tb["indicated_annual_premium_usd"].sum() if len(tb) else 0,
                     "UW Score Band": info["uw_score_band"],
-                    "Avg Loss Propensity": tb["loss_propensity_score_0_100"].mean() if len(tb) else None,
+                    "Avg Loss Propensity": tb["loss_propensity_score_v2"].mean() if len(tb) else None,
                     "Avg Claim Count": tb["claim_count_total"].mean() if len(tb) else None,
-                    "Avg Bind Propensity": tb["bind_propensity_score_0_100"].mean() if len(tb) else None,
-                    "Avg Appetite Score": tb["appetite_capacity_score_0_100"].mean() if len(tb) else None,
-                    "Avg UW Score": tb["final_priority_score_0_100"].mean() if len(tb) else None,
+                    "Avg Bind Propensity": tb["bind_propensity_score_v2"].mean() if len(tb) else None,
+                    "Avg Appetite Score": tb["appetite_capacity_score_v2"].mean() if len(tb) else None,
+                    "Avg UW Score": tb["uw_score_v2"].mean() if len(tb) else None,
                     "What It Means": info["what_it_means"],
                     "UW Action": info["uw_action"],
                     "Pricing Guidance": info["pricing_guidance"],
@@ -240,11 +235,11 @@ with tab_dashboard:
                 "Risk Tier": "Total / Book Average",
                 "Opportunity Premium": fb["indicated_annual_premium_usd"].sum(),
                 "UW Score Band": "—",
-                "Avg Loss Propensity": fb["loss_propensity_score_0_100"].mean(),
+                "Avg Loss Propensity": fb["loss_propensity_score_v2"].mean(),
                 "Avg Claim Count": fb["claim_count_total"].mean(),
-                "Avg Bind Propensity": fb["bind_propensity_score_0_100"].mean(),
-                "Avg Appetite Score": fb["appetite_capacity_score_0_100"].mean(),
-                "Avg UW Score": fb["final_priority_score_0_100"].mean(),
+                "Avg Bind Propensity": fb["bind_propensity_score_v2"].mean(),
+                "Avg Appetite Score": fb["appetite_capacity_score_v2"].mean(),
+                "Avg UW Score": fb["uw_score_v2"].mean(),
                 "What It Means": "", "UW Action": "", "Pricing Guidance": "",
             })
             matrix_df = pd.DataFrame(matrix_rows)
@@ -270,7 +265,7 @@ with tab_dashboard:
         else:
             c1, c2 = st.columns(2)
             with c1:
-                tier_counts = fb["risk_tier"].value_counts().reindex(RISK_TIER_ORDER).fillna(0)
+                tier_counts = fb["risk_tier_v2"].value_counts().reindex(RISK_TIER_ORDER).fillna(0)
                 fig = px.pie(names=tier_counts.index, values=tier_counts.values, hole=0.45,
                              color=tier_counts.index, color_discrete_map=TIER_COLORS,
                              title="Risk Tier Distribution")
@@ -288,10 +283,10 @@ with tab_dashboard:
 
             c3, c4 = st.columns(2)
             with c3:
-                ct = fb.groupby(["line_of_business", "risk_tier"], observed=True).size().reset_index(name="count")
-                fig = px.bar(ct, x="count", y="line_of_business", color="risk_tier", orientation="h",
+                ct = fb.groupby(["line_of_business", "risk_tier_v2"], observed=True).size().reset_index(name="count")
+                fig = px.bar(ct, x="count", y="line_of_business", color="risk_tier_v2", orientation="h",
                              color_discrete_map=TIER_COLORS, title="Submission Count by LOB x Risk Tier",
-                             labels={"count": "Submissions", "line_of_business": "", "risk_tier": "Tier"})
+                             labels={"count": "Submissions", "line_of_business": "", "risk_tier_v2": "Tier"})
                 fig.update_traces(hovertemplate="%{y}<br>%{fullData.name}: %{x:,} submissions<extra></extra>")
                 fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), legend_title="", font=dict(size=13), title_font=dict(size=15))
                 st.plotly_chart(fig, width='stretch')
@@ -306,7 +301,7 @@ with tab_dashboard:
 
             c5, c6 = st.columns(2)
             with c5:
-                large_by_tier = fb.groupby("risk_tier", observed=True)["large_claim_flag"].sum().reindex(RISK_TIER_ORDER).fillna(0)
+                large_by_tier = fb.groupby("risk_tier_v2", observed=True)["large_claim_flag"].sum().reindex(RISK_TIER_ORDER).fillna(0)
                 fig = px.bar(x=large_by_tier.index, y=large_by_tier.values,
                              color=large_by_tier.index, color_discrete_map=TIER_COLORS,
                              title="Large-Loss Count by Tier", labels={"x": "", "y": "Large-Loss Count"},
@@ -316,22 +311,22 @@ with tab_dashboard:
                 fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=30), showlegend=False, font=dict(size=13), title_font=dict(size=15))
                 st.plotly_chart(fig, width='stretch')
             with c6:
-                score_by_tier = fb.groupby("risk_tier", observed=True).agg(
-                    Loss=("loss_propensity_score_0_100", "mean"),
-                    Bind=("bind_propensity_score_0_100", "mean"),
-                    Appetite=("appetite_capacity_score_0_100", "mean"),
+                score_by_tier = fb.groupby("risk_tier_v2", observed=True).agg(
+                    Loss=("loss_propensity_score_v2", "mean"),
+                    Bind=("bind_propensity_score_v2", "mean"),
+                    Appetite=("appetite_capacity_score_v2", "mean"),
                 ).reindex(RISK_TIER_ORDER).reset_index()
-                score_by_tier_long = score_by_tier.melt(id_vars="risk_tier", var_name="Score Type", value_name="Avg Score")
-                fig = px.bar(score_by_tier_long, x="risk_tier", y="Avg Score", color="Score Type",
+                score_by_tier_long = score_by_tier.melt(id_vars="risk_tier_v2", var_name="Score Type", value_name="Avg Score")
+                fig = px.bar(score_by_tier_long, x="risk_tier_v2", y="Avg Score", color="Score Type",
                              barmode="group", title="Avg Loss / Bind / Appetite Score by Tier",
-                             color_discrete_sequence=[BAD, ACCENT, GOOD], labels={"risk_tier": ""})
+                             color_discrete_sequence=[BAD, ACCENT, GOOD], labels={"risk_tier_v2": ""})
                 fig.update_traces(hovertemplate="%{x}<br>%{fullData.name}: %{y:.1f}<extra></extra>")
                 fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), legend_title="", font=dict(size=13), title_font=dict(size=15))
                 st.plotly_chart(fig, width='stretch')
 
             c7, c8 = st.columns(2)
             with c7:
-                bind_by_broker = fb.groupby("broker_tier")["bind_propensity_score_0_100"].mean().reindex(
+                bind_by_broker = fb.groupby("broker_tier")["bind_propensity_score_v2"].mean().reindex(
                     ["Platinum", "Gold", "Silver", "Bronze"]).dropna()
                 fig = px.bar(x=bind_by_broker.index, y=bind_by_broker.values, color_discrete_sequence=[ACCENT],
                              title="Avg Bind Propensity by Broker Tier", labels={"x": "", "y": "Avg Bind Propensity"})
@@ -339,7 +334,7 @@ with tab_dashboard:
                 fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10), font=dict(size=13), title_font=dict(size=15))
                 st.plotly_chart(fig, width='stretch')
             with c8:
-                bind_by_size = fb.groupby("broker_size_class")["bind_propensity_score_0_100"].mean().sort_values()
+                bind_by_size = fb.groupby("broker_size_class")["bind_propensity_score_v2"].mean().sort_values()
                 fig = px.bar(x=bind_by_size.values, y=bind_by_size.index, orientation="h", color_discrete_sequence=[ACCENT],
                              title="Avg Bind Propensity by Broker Size", labels={"x": "Avg Bind Propensity", "y": ""})
                 fig.update_traces(hovertemplate="%{y}: %{x:.1f} avg Bind Propensity<extra></extra>")
@@ -389,16 +384,16 @@ with tab_dashboard:
                          })
 
             st.markdown("**Claims Detail by Risk Tier**")
-            detail_tier = fb.groupby("risk_tier", observed=True).agg(
+            detail_tier = fb.groupby("risk_tier_v2", observed=True).agg(
                 Submissions_w_Claim=("claim_count_total", lambda x: (x > 0).sum()),
                 Total_Incurred=("total_incurred_claim_amount_usd", "sum"),
                 Large_Loss_Count=("large_claim_flag", "sum"),
                 Catastrophic_Loss_Count=("catastrophic_loss_flag", "sum"),
                 Avg_Claim_Count=("claim_count_total", "mean"),
             ).reindex(RISK_TIER_ORDER).reset_index()
-            st.dataframe(style_risk_tier_column(detail_tier, "risk_tier"), width='stretch', hide_index=True,
+            st.dataframe(style_risk_tier_column(detail_tier, "risk_tier_v2"), width='stretch', hide_index=True,
                          column_config={
-                             "risk_tier": "Risk Tier",
+                             "risk_tier_v2": "Risk Tier",
                              "Total_Incurred": st.column_config.NumberColumn("Total Incurred", format="$%d"),
                              "Avg_Claim_Count": st.column_config.NumberColumn("Avg Claim Count", format="%.2f"),
                          })
@@ -417,67 +412,68 @@ with tab_dashboard:
 
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             st.subheader("Decision Output 1 — Top 20 Referral Queue")
-            referral = fb.sort_values("loss_ratio_before_propensity_pct", ascending=False).head(20)
+            referral = fb.sort_values("predicted_loss_ratio_pct", ascending=False).head(20)
             referral_display = referral[["submission_id", "line_of_business", "risk_location_region", "total_insured_value_usd",
-                          "loss_ratio_before_propensity_pct", "risk_tier", "large_claim_flag",
-                          "loss_propensity_score_0_100", "bind_propensity_score_0_100", "appetite_capacity_score_0_100",
-                          "final_priority_score_0_100", "primary_cause_of_claim", "hospital_visit_count",
-                          "expected_further_visits", "recommended_uw_action", "decline_review_reason"]]
+                          "predicted_loss_ratio_pct", "risk_tier_v2", "large_claim_flag",
+                          "loss_propensity_score_v2", "bind_propensity_score_v2", "appetite_capacity_score_v2",
+                          "uw_score_v2", "primary_cause_of_claim", "hospital_visit_count",
+                          "expected_further_visits", "recommended_uw_action_v2", "decline_review_reason_v2"]].copy()
+            referral_display["large_claim_flag"] = referral_display["large_claim_flag"].map({1: "Yes", 0: "No", True: "Yes", False: "No"})
             st.dataframe(
-                style_risk_tier_column(referral_display, "risk_tier"),
+                style_risk_tier_column(referral_display, "risk_tier_v2"),
                 width='stretch', hide_index=True,
                 column_config={
                     "submission_id": "Submission ID", "line_of_business": "LOB", "risk_location_region": "Risk Region",
                     "total_insured_value_usd": st.column_config.NumberColumn("TIV", format="$%d"),
-                    "loss_ratio_before_propensity_pct": st.column_config.NumberColumn("Loss Ratio Before", format="%.1f%%"),
-                    "risk_tier": "Risk Tier", "large_claim_flag": st.column_config.CheckboxColumn("Large Loss?"),
-                    "loss_propensity_score_0_100": "Loss Prop.", "bind_propensity_score_0_100": "Bind Prop.",
-                    "appetite_capacity_score_0_100": "Appetite/Cap.", "final_priority_score_0_100": "UW Score",
+                    "predicted_loss_ratio_pct": st.column_config.NumberColumn("Predicted Loss Ratio", format="%.1f%%"),
+                    "risk_tier_v2": "Risk Tier", "large_claim_flag": "Large Loss?",
+                    "loss_propensity_score_v2": "Loss Prop.", "bind_propensity_score_v2": "Bind Prop.",
+                    "appetite_capacity_score_v2": "Appetite/Cap.", "uw_score_v2": "UW Score",
                     "primary_cause_of_claim": "Cause of Claim", "hospital_visit_count": "Hosp. Visits",
-                    "expected_further_visits": "Exp. Further Visits", "recommended_uw_action": "Recommended UW Action",
-                    "decline_review_reason": "Reason for Decline/Refer",
+                    "expected_further_visits": "Exp. Further Visits", "recommended_uw_action_v2": "Recommended UW Action",
+                    "decline_review_reason_v2": "Reason for Decline/Refer",
                 },
             )
 
             st.subheader("Decision Output 2 — Top 10 Priority Opportunities")
-            priority_pool = fb[fb["appetite_capacity_decision"] == "Within Appetite"]
-            priority = priority_pool.sort_values("final_priority_score_0_100", ascending=False).head(10)
+            priority_pool = fb[fb["appetite_capacity_decision_v2"] == "Within Appetite"]
+            priority = priority_pool.sort_values("uw_score_v2", ascending=False).head(10)
             priority_display = priority[["submission_id", "line_of_business", "risk_location_region", "broker_tier",
-                          "total_insured_value_usd", "loss_ratio_after_propensity_pct", "risk_tier",
-                          "loss_propensity_score_0_100", "bind_propensity_score_0_100", "appetite_capacity_score_0_100",
-                          "final_priority_score_0_100", "appetite_capacity_decision", "recommended_uw_action",
-                          "priority_strength_reason"]]
+                          "total_insured_value_usd", "predicted_loss_ratio_pct", "risk_tier_v2",
+                          "loss_propensity_score_v2", "bind_propensity_score_v2", "appetite_capacity_score_v2",
+                          "uw_score_v2", "appetite_capacity_decision_v2", "recommended_uw_action_v2",
+                          "priority_strength_reason_v2"]]
             st.dataframe(
-                style_risk_tier_column(priority_display, "risk_tier"),
+                style_risk_tier_column(priority_display, "risk_tier_v2"),
                 width='stretch', hide_index=True,
                 column_config={
                     "submission_id": "Submission ID", "line_of_business": "LOB", "risk_location_region": "Risk Region",
                     "broker_tier": "Broker Tier",
                     "total_insured_value_usd": st.column_config.NumberColumn("TIV", format="$%d"),
-                    "loss_ratio_after_propensity_pct": st.column_config.NumberColumn("Loss Ratio After", format="%.1f%%"),
-                    "risk_tier": "Risk Tier", "loss_propensity_score_0_100": "Loss Prop.",
-                    "bind_propensity_score_0_100": "Bind Prop.", "appetite_capacity_score_0_100": "Appetite/Cap.",
-                    "final_priority_score_0_100": "UW Score", "appetite_capacity_decision": "Appetite Decision",
-                    "recommended_uw_action": "Recommended UW Action", "priority_strength_reason": "Reason This Is a Priority",
+                    "predicted_loss_ratio_pct": st.column_config.NumberColumn("Predicted Loss Ratio", format="%.1f%%"),
+                    "risk_tier_v2": "Risk Tier", "loss_propensity_score_v2": "Loss Prop.",
+                    "bind_propensity_score_v2": "Bind Prop.", "appetite_capacity_score_v2": "Appetite/Cap.",
+                    "uw_score_v2": "UW Score", "appetite_capacity_decision_v2": "Appetite Decision",
+                    "recommended_uw_action_v2": "Recommended UW Action", "priority_strength_reason_v2": "Reason This Is a Priority",
                 },
             )
 
             st.subheader("Decision Output 3 — Emerging Risk Watch List")
             watch_pool = fb[fb["claim_count_total"] <= 1]
-            watch = watch_pool.sort_values("prospective_risk_flag_count", ascending=False).head(15)
+            watch = watch_pool.sort_values("prospective_risk_flag_count_v2", ascending=False).head(15)
             watch_display = watch[["submission_id", "line_of_business", "risk_location_region", "broker_tier",
-                       "total_insured_value_usd", "risk_tier", "claim_count_total", "loss_propensity_score_0_100",
-                       "prospective_risk_flag_count", "prospective_risk_flags", "recommended_uw_action"]]
+                       "total_insured_value_usd", "risk_tier_v2", "claim_count_total", "loss_propensity_score_v2",
+                       "prospective_risk_flag_count_v2", "prospective_risk_flags_v2", "recommended_uw_action_v2"]]
             st.dataframe(
-                style_risk_tier_column(watch_display, "risk_tier"),
+                style_risk_tier_column(watch_display, "risk_tier_v2"),
                 width='stretch', hide_index=True,
                 column_config={
                     "submission_id": "Submission ID", "line_of_business": "LOB", "risk_location_region": "Risk Region",
                     "broker_tier": "Broker Tier",
                     "total_insured_value_usd": st.column_config.NumberColumn("TIV", format="$%d"),
-                    "risk_tier": "Risk Tier", "claim_count_total": "Claim Count",
-                    "loss_propensity_score_0_100": "Loss Prop.", "prospective_risk_flag_count": "Flag Count",
-                    "prospective_risk_flags": "Prospective Risk Factors", "recommended_uw_action": "Recommended UW Action",
+                    "risk_tier_v2": "Risk Tier", "claim_count_total": "Claim Count",
+                    "loss_propensity_score_v2": "Loss Prop.", "prospective_risk_flag_count_v2": "Flag Count",
+                    "prospective_risk_flags_v2": "Prospective Risk Factors", "recommended_uw_action_v2": "Recommended UW Action",
                 },
             )
 
@@ -547,21 +543,21 @@ with tab_submission:
             with col1:
                 st.markdown("**Property**")
                 construction_type = st.selectbox("Construction Type", CATEGORICAL_OPTIONS["construction_type"], disabled=not is_property)
-                year_built = st.number_input("Year Built", 1900, 2026, 2000, disabled=not is_property)
+                year_built = st.number_input("Year Built", 1910, CURRENT_YEAR, 2000, disabled=not is_property)
                 built_to_code = st.selectbox("Built to Current Code", ["No", "Yes"], disabled=not is_property) == "Yes"
-                num_stories = st.number_input("Number of Stories", 1, 50, 2, disabled=not is_property)
-                square_footage = st.number_input("Square Footage", 500, 500000, 5000, disabled=not is_property)
-                total_insured_value_usd = st.number_input("Total Insured Value ($)", 50000, 50000000, 500000, step=10000, disabled=not is_property)
+                num_stories = st.number_input("Number of Stories", 1, 11, 2, disabled=not is_property)
+                square_footage = st.number_input("Square Footage", 1000, 268000, 5000, disabled=not is_property)
+                total_insured_value_usd = st.number_input("Total Insured Value ($)", 40000, 25000000, 500000, step=10000, disabled=not is_property)
                 occupancy_type = st.selectbox("Occupancy Type", CATEGORICAL_OPTIONS["occupancy_type"], disabled=not is_property)
-                roof_age_years = st.number_input("Roof Age (years)", 0, 120, 15, disabled=not is_property)
+                roof_age_years = st.number_input("Roof Age (years)", 1, 120, 15, disabled=not is_property)
                 roof_type = st.selectbox("Roof Type", CATEGORICAL_OPTIONS["roof_type"], disabled=not is_property)
                 sprinklered_flag = st.selectbox("Sprinklered", CATEGORICAL_OPTIONS["sprinklered_flag"], disabled=not is_property)
                 fire_protection_class_iso_ppc = st.slider("Fire Protection Class (ISO PPC, 1=best)", 1, 10, 5, disabled=not is_property)
 
             with col2:
                 st.markdown("**Location Hazard**")
-                distance_to_fire_station_miles = st.number_input("Distance to Fire Station (miles)", 0.0, 50.0, 5.0, disabled=not is_property)
-                distance_to_fire_hydrant_miles = st.number_input("Distance to Fire Hydrant (miles)", 0.0, 10.0, 0.5, disabled=not is_property)
+                distance_to_fire_station_miles = st.number_input("Distance to Fire Station (miles)", 0.1, 22.0, 5.0, disabled=not is_property)
+                distance_to_fire_hydrant_miles = st.number_input("Distance to Fire Hydrant (miles)", 0.0, 3.0, 0.5, disabled=not is_property)
                 fire_alarm_monitoring_type = st.selectbox("Fire Alarm Monitoring", CATEGORICAL_OPTIONS["fire_alarm_monitoring_type"], disabled=not is_property)
                 flood_zone_tier = st.selectbox("Flood Zone Tier", CATEGORICAL_OPTIONS["tier"], disabled=not is_property)
                 fema_flood_zone_code = st.selectbox("FEMA Flood Zone Code", CATEGORICAL_OPTIONS["fema_flood_zone_code"], disabled=not is_property)
@@ -569,30 +565,33 @@ with tab_submission:
                 soil_liquefaction_class = st.selectbox("Soil Liquefaction Class", CATEGORICAL_OPTIONS["soil_liquefaction_class"], disabled=not is_property)
                 wildfire_zone_tier = st.selectbox("Wildfire Zone Tier", CATEGORICAL_OPTIONS["tier"], disabled=not is_property)
                 wind_zone_tier = st.selectbox("Wind Zone Tier", CATEGORICAL_OPTIONS["tier"], disabled=not is_property)
+                primary_cat_peril_exposure = st.selectbox(
+                    "Primary CAT Peril Exposure", PRIMARY_CAT_PERIL_OPTIONS, disabled=not is_property,
+                    help="The dominant catastrophe peril this risk is exposed to.")
                 distance_to_coast_miles = st.number_input("Distance to Coast (miles)", 0.0, 800.0, 60.0, disabled=not is_property)
                 distance_to_fault_line_miles = st.number_input("Distance to Fault Line (miles)", 0.0, 400.0, 60.0, disabled=not is_property)
                 distance_to_nearest_water_body_miles = st.number_input("Distance to Nearest Water Body (miles)", 0.0, 50.0, 3.0, disabled=not is_property)
 
                 st.markdown("**Business & Workforce**")
                 industry_class_naics = st.selectbox("Industry Class (NAICS)", INDUSTRY_OPTIONS, disabled=is_property)
-                number_of_employees = st.number_input("Number of Employees", 1, 20000, 25, disabled=is_property)
-                avg_wage_per_employee_usd = st.number_input("Avg. Wage per Employee ($)", 15000, 300000, 55000, step=1000, disabled=is_property)
-                avg_employee_age = st.number_input("Avg. Employee Age", 18, 70, 40, disabled=is_property)
-                avg_weekly_work_hours = st.number_input("Avg. Weekly Work Hours", 10.0, 60.0, 40.0, disabled=is_property)
+                number_of_employees = st.number_input("Number of Employees", 1, 5000, 25, disabled=is_property)
+                avg_wage_per_employee_usd = st.number_input("Avg. Wage per Employee ($)", 46000, 94000, 55000, step=1000, disabled=is_property)
+                avg_employee_age = st.number_input("Avg. Employee Age", 19, 66, 40, disabled=is_property)
+                avg_weekly_work_hours = st.number_input("Avg. Weekly Work Hours", 18.0, 50.0, 40.0, disabled=is_property)
 
             with col3:
                 st.markdown("**Claims History**")
-                claim_count_last_3_years = st.number_input("Claim Count - Last 3 Years", 0, 20, 0)
-                large_loss_count_last_5_years = st.number_input("Large-Loss Count - Last 5 Years", 0, 10, 0)
+                claim_count_last_3_years = st.number_input("Claim Count - Last 3 Years", 0, 9, 0)
+                large_loss_count_last_5_years = st.number_input("Large-Loss Count - Last 5 Years", 0, 3, 0)
                 claims_free_years = st.number_input("Claims-Free Years", 0, 10, 5)
 
                 st.markdown("**Financial & Operational**")
-                financial_stability_score = st.slider("Financial Stability Score", 0, 100, 55)
+                financial_stability_score = st.slider("Financial Stability Score", 5, 100, 55)
                 safety_program_flag = st.selectbox("Safety Program in Place", ["No", "Yes"]) == "Yes"
                 safety_inspection_findings = st.selectbox("Safety Inspection Findings", CATEGORICAL_OPTIONS["safety_inspection_findings"])
-                business_tenure_years = st.number_input("Business Tenure (years)", 0, 100, 10)
-                revenue_growth_trend_pct = st.number_input("Revenue Growth Trend (%)", -50.0, 100.0, 3.0)
-                debt_to_equity_ratio = st.number_input("Debt-to-Equity Ratio", 0.0, 10.0, 1.0)
+                business_tenure_years = st.number_input("Business Tenure (years)", 0, 80, 10)
+                revenue_growth_trend_pct = st.number_input("Revenue Growth Trend (%)", -30.0, 60.0, 3.0)
+                debt_to_equity_ratio = st.number_input("Debt-to-Equity Ratio", 0.0, 5.0, 1.0)
                 policy_term_months = st.selectbox("Policy Term (months)", [6, 12, 24, 36], index=1)
                 st.caption("Premium is calculated automatically from the inputs above - not typed in.")
 
@@ -616,7 +615,7 @@ with tab_submission:
             submitted = st.form_submit_button("Score Submission", type="primary")
 
         if submitted:
-            building_age_years = 2026 - year_built
+            building_age_years = CURRENT_YEAR - year_built
             validation_errors = []
             if is_property and roof_age_years > building_age_years:
                 validation_errors.append(
@@ -646,6 +645,7 @@ with tab_submission:
                 "flood_zone_tier": flood_zone_tier, "fema_flood_zone_code": fema_flood_zone_code,
                 "earthquake_zone_tier": earthquake_zone_tier, "soil_liquefaction_class": soil_liquefaction_class,
                 "wildfire_zone_tier": wildfire_zone_tier, "wind_zone_tier": wind_zone_tier,
+                "primary_cat_peril_exposure": primary_cat_peril_exposure,
                 "distance_to_coast_miles": distance_to_coast_miles,
                 "distance_to_fault_line_miles": distance_to_fault_line_miles,
                 "distance_to_nearest_water_body_miles": distance_to_nearest_water_body_miles,

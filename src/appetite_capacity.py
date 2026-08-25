@@ -52,6 +52,38 @@ STATE_HEADROOM_AVERAGES = {
 }
 NATIONAL_AVG_HEADROOM = 0.20  # fallback for a state not in the lookup
 
+# calibrated against each measure's own real range (see compute_capacity_headroom's comment) -
+# industry concentration spans roughly -1.4 to +9.1 percentage points across the 10 real
+# classes; state reinsurance headroom spans roughly -208 to +88 (Oklahoma and Washington are
+# structurally, severely over treaty capacity - a real CAT-exposure story, not noise). One
+# shared multiplier can't be well-calibrated for both at once.
+INDUSTRY_HEADROOM_SCALE = 3.0
+STATE_HEADROOM_SCALE = 0.25
+
+# real per-industry share of the book's total TIV, computed once from the actual 20,000-row
+# book (python -c "from data_loader import load_data; df,*_ = load_data(); print((df.groupby('industry_class_naics')['total_insured_value_usd'].sum() / df['total_insured_value_usd'].sum()).round(4))")
+# - Manufacturing already sits slightly ABOVE the 15% concentration cap (16.36%), a real,
+# mild capacity constraint. Regenerate this dict (same command) whenever the real book's
+# industry mix changes materially.
+#
+# THE BUG THIS REPLACES: compute_capacity_headroom() used to recompute concentration from
+# whatever dataframe was passed into score() itself. That's correct when scoring the full
+# 20,000-row book (combine_scores.py, the dashboard) - the batch IS the book. But every
+# single live Submission-tab score (and every test in test_model_behavior.py) calls score()
+# on a ONE-ROW dataframe - so that one row's own industry was silently treated as 100% of
+# the reference book, every time, for every industry. That forced the headroom component to
+# its floor of 0 on almost every live submission, regardless of the real book's actual
+# exposure - found 2026-08 while walking a brand-new submission through the pipeline by hand
+# and noticing the appetite score didn't move the way the real concentration numbers implied
+# it should. Using this fixed, real reference instead means a single submission's score no
+# longer depends on what else happens to be in the same batch it was scored alongside.
+INDUSTRY_CONCENTRATION_BY_NAICS = {
+    "Accommodation & Food Services": 0.0772, "Administrative Services": 0.0588,
+    "Construction": 0.1355, "Health Care": 0.0732, "Manufacturing": 0.1636,
+    "Professional Services": 0.0828, "Real Estate": 0.0942, "Retail Trade": 0.1224,
+    "Transportation & Warehousing": 0.0898, "Wholesale Trade": 0.1025,
+}
+
 
 def hard_rule_pass(df):
     """Exact, verified deterministic veto - any one of these 4 flags true means automatic fail."""
@@ -63,11 +95,31 @@ def hard_rule_pass(df):
     )
 
 
+def _is_severe(series):
+    """flood/earthquake/wildfire zone tier arrives as the string "Severe" when called on raw,
+    unencoded data (this module's own __main__ verification block below) but as the ordinal
+    integer 3 when called from the real pipeline (scoring.py encodes Low/Moderate/High/Severe
+    -> 0-3 BEFORE calling compute_appetite_capacity_score, for the loss models' benefit).
+    Comparing only against the string meant this penalty compared "3" == "Severe" in the real
+    pipeline - always False - and silently never fired for a single live-scored submission,
+    found 2026-08 by scoring an identical submission with and without a severe CAT zone and
+    seeing zero difference in the appetite score. Handles both representations so it actually
+    fires wherever it's called from."""
+    # dtype == object used to be a safe "is this still text" check, but pandas 3.x's default
+    # string columns (what data_loader.load_data() actually returns) use a newer Arrow-backed
+    # string dtype that ISN'T object - dtype==object silently missed it, fell through to the
+    # numeric branch, and crashed comparing text to 3. is_numeric_dtype is robust to whichever
+    # string backend pandas is using.
+    if pd.api.types.is_numeric_dtype(series):
+        return series >= 3
+    return series == "Severe"
+
+
 def cat_tiv_penalty(df):
     """Approximated soft penalty, NOT an exact reconstruction - see module docstring."""
     any_severe_cat = (
-        (df["flood_zone_tier"] == "Severe") | (df["earthquake_zone_tier"] == "Severe")
-        | (df["wildfire_zone_tier"] == "Severe")
+        _is_severe(df["flood_zone_tier"]) | _is_severe(df["earthquake_zone_tier"])
+        | _is_severe(df["wildfire_zone_tier"])
     )
     high_tiv = df["total_insured_value_usd"] > 2_000_000
     return np.where(any_severe_cat & high_tiv, -12, np.where(any_severe_cat, -8, 0))
@@ -95,12 +147,21 @@ def compute_appetite_fit(df, coefficients):
 def compute_capacity_headroom(df, book_for_concentration=None):
     """Blends industry concentration headroom with state-level reinsurance headroom, taking
     the tighter (more restrictive) of the two - same "tightest constraint governs" logic the
-    source file itself uses across its own state/regional/country reinsurance tiers."""
-    reference = book_for_concentration if book_for_concentration is not None else df
-    concentration_by_industry = (
-        reference.groupby("industry_class_naics")["total_insured_value_usd"].sum()
-        / reference["total_insured_value_usd"].sum()
-    )
+    source file itself uses across its own state/regional/country reinsurance tiers.
+
+    Industry concentration is measured against the REAL book (INDUSTRY_CONCENTRATION_BY_NAICS)
+    by default, not against whatever df happens to be passed in - see the module-level
+    constant's comment for why. Pass book_for_concentration explicitly only if you genuinely
+    want concentration measured against a different reference portfolio (e.g. a full re-score
+    of a brand-new book during a retrain, where the new book itself IS the right reference)."""
+    if book_for_concentration is not None:
+        reference = book_for_concentration
+        concentration_by_industry = (
+            reference.groupby("industry_class_naics")["total_insured_value_usd"].sum()
+            / reference["total_insured_value_usd"].sum()
+        )
+    else:
+        concentration_by_industry = pd.Series(INDUSTRY_CONCENTRATION_BY_NAICS)
     concentration = df["industry_class_naics"].map(concentration_by_industry).fillna(0)
     industry_headroom_pct = (CONCENTRATION_CAP_PCT - concentration) * 100
 
@@ -109,16 +170,56 @@ def compute_capacity_headroom(df, book_for_concentration=None):
     else:
         state_headroom_pct = pd.Series(NATIONAL_AVG_HEADROOM * 100, index=df.index)
 
-    return np.minimum(industry_headroom_pct, state_headroom_pct)
+    # Scaled to a comparable 0-100 range HERE, each on its own real span, before combining -
+    # found 2026-08 that combining the two raw percentage-point values first and applying one
+    # shared multiplier afterward meant a constant tuned for industry's narrow real range
+    # (-1.4 to +9.1 pts) made state's much wider real range (-208 to +88 pts) saturate almost
+    # immediately: 4 of 31 states (FL, NJ, OK, WA) all floored to the identical score despite
+    # genuinely different degrees of capacity constraint. "Tightest constraint governs" only
+    # means something if both sides are on the same scale first.
+    industry_component = np.clip(50 + industry_headroom_pct * INDUSTRY_HEADROOM_SCALE, 0, 100)
+    state_component = np.clip(50 + state_headroom_pct * STATE_HEADROOM_SCALE, 0, 100)
+    return np.minimum(industry_component, state_component)
 
 
 def compute_appetite_capacity_score(df, coefficients, book_for_concentration=None):
     fit = compute_appetite_fit(df, coefficients)
-    headroom = compute_capacity_headroom(df, book_for_concentration)
-    headroom_component = np.clip(50 + headroom * 5, 0, 100)
+    headroom_component = compute_capacity_headroom(df, book_for_concentration)  # already 0-100 scaled
     passed = hard_rule_pass(df)
     score = np.where(passed, np.clip(0.75 * fit + 0.25 * headroom_component, 0, 100), 0)
     return np.round(score, 1)
+
+
+# thresholds calibrated against the real book's own fit/headroom distributions among rows that
+# pass the hard-rule gate (fit: mean 54.9, IQR 50.9-58.8, unchanged by the headroom rescaling
+# above). headroom: re-calibrated 2026-08 after the industry/state rescaling fix changed its
+# distribution from mean 56.4/IQR 43.2-80.1 to mean 50.4/IQR 45.9-58.3 - the old thresholds
+# (40/60) would have sat almost entirely outside the new, much less saturated range (60 was
+# ABOVE the new 75th percentile of 58.3, which would have made "Within Appetite" nearly
+# unreachable). Not a reconstruction of the original file's own 4-category split (that logic
+# isn't recoverable from the fields available - same limitation noted throughout this module) -
+# a defensible, real classification built on the two components this formula actually computes.
+FIT_MARGINAL_THRESHOLD = 50    # below the real book's ~25th percentile fit among passing rows
+FIT_STRONG_THRESHOLD = 58      # at/above the real book's ~75th percentile
+HEADROOM_CONSTRAINED_THRESHOLD = 46  # below the real book's ~25th percentile headroom
+HEADROOM_COMFORTABLE_THRESHOLD = 55  # at/above the real book's median
+
+
+def compute_appetite_decision(df, coefficients, book_for_concentration=None):
+    """Categorizes each row the same way the source file's own appetite_capacity_decision
+    column does conceptually (Decline / Refer-Marginal Fit / Refer-Capacity Constrained /
+    Within Appetite), but derived from THIS formula's own fit and headroom components instead
+    of reverse-engineering the original's unrecoverable category logic."""
+    fit = pd.Series(compute_appetite_fit(df, coefficients), index=df.index)
+    headroom_component = pd.Series(compute_capacity_headroom(df, book_for_concentration), index=df.index)
+    passed = hard_rule_pass(df)
+
+    decision = pd.Series("Refer – Marginal Fit", index=df.index)  # default/catch-all
+    decision[(fit >= FIT_STRONG_THRESHOLD) & (headroom_component >= HEADROOM_COMFORTABLE_THRESHOLD)] = "Within Appetite"
+    decision[headroom_component < HEADROOM_CONSTRAINED_THRESHOLD] = "Refer – Capacity Constrained"
+    decision[fit < FIT_MARGINAL_THRESHOLD] = "Refer – Marginal Fit"  # weak fit overrides a capacity read
+    decision[~passed] = "Decline – Outside Appetite"  # hard-rule veto always wins
+    return decision
 
 
 def verify_appetite_formula(df):

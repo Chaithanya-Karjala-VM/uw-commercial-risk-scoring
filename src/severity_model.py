@@ -25,6 +25,15 @@ MONOTONIC_DIRECTION = {
     "distance_to_nearest_water_body_miles": -1, "distance_to_fire_station_miles": 1,
     "distance_to_fire_hydrant_miles": 1, "debt_to_equity_ratio": 1,
     "flood_zone_tier": 1, "earthquake_zone_tier": 1, "wildfire_zone_tier": 1, "wind_zone_tier": 1,
+    # added 2026-08 - see frequency_model.py's MONOTONIC_DIRECTION comment for the full
+    # reasoning (same audit, same directions). number_of_employees/total_insured_value_usd
+    # stay as ordinary constrained features here (unlike frequency_model.py, where they become
+    # an explicit exposure multiplier instead) - bigger operations/assets plausibly cost more
+    # per claim when one happens, even though claim COUNT needed the exposure-unit fix instead.
+    "revenue_growth_trend_pct": -1, "business_tenure_years": -1, "avg_weekly_work_hours": 1,
+    "avg_employee_age": 1, "avg_wage_per_employee_usd": -1,
+    "number_of_employees": 1, "total_insured_value_usd": 1,
+    "num_stories": 1,
 }
 
 df, schema, usable_for, output_cols = load_data()
