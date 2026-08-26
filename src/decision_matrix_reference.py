@@ -18,6 +18,14 @@ def tier_for_score(uw_score):
     return "Decline"
 
 
+# machine-usable version of the pricing_guidance text below - added 2026-08 so the What-If
+# Simulator can show a real adjusted "quoted" premium next to the technical one, not just the
+# text describing what should happen. "High" uses the midpoint of the documented +10-20% rate
+# range. "Decline" has no adjusted premium - per its own pricing_guidance, it isn't quoted at
+# all, so this maps to None rather than 0%.
+RISK_TIER_PREMIUM_LOADING = {"Preferred": 0.0, "Standard": 0.0, "High": 0.15, "Decline": None}
+
+
 RISK_TIER_INFO = {
     "Preferred": {
         "uw_score_band": "≥ 72",

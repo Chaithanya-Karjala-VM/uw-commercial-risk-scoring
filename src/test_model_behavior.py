@@ -152,17 +152,27 @@ def stage_3_bind_sensitivity():
 
 def stage_4_appetite_gate():
     print("\n=== Stage 4: Appetite hard-rule gate - all 16 flag combinations ===")
-    base = base_row("Commercial Property", "mid")
+    # uses "best" risk (not "mid") deliberately - regression test for a real bug found
+    # 2026-08: risk_tier_v2 used to be computed from uw_score_v2 alone, so a hard-rule
+    # failure paired with an otherwise-clean loss/bind profile could still land in
+    # Standard/High instead of Decline, contradicting the documented rule ("Decline: < 38,
+    # OR any hard-rule fail"). "best" risk is the case most likely to expose this - genuinely
+    # good loss/bind scores are exactly what could out-vote a zeroed appetite in the blend.
+    base = base_row("Commercial Property", "best")
     flags = ["sanctions_ofac_watchlist_flag", "prior_insolvency_bankruptcy_flag",
              "restricted_operations_flag", "region_lob_restricted_flag"]
-    violations = 0
+    violations, tier_violations = 0, []
     for combo in itertools.product([0, 1], repeat=4):
         r = {**base, **dict(zip(flags, combo))}
         s = score_one(r)
         if any(combo) and s["appetite_capacity_score_v2"] != 0:
             violations += 1
             print(f"  VIOLATION: flags={combo} -> Appetite={s['appetite_capacity_score_v2']}")
-    print(f"  16/16 combinations tested, {violations} gate violations")
+        if any(combo) and s["risk_tier_v2"] != "Decline":
+            tier_violations.append((combo, s["risk_tier_v2"], s["uw_score_v2"]))
+    print(f"  16/16 combinations tested, {violations} gate violations, {len(tier_violations)} risk_tier_v2 mismatches")
+    for combo, tier, uw in tier_violations:
+        print(f"    VIOLATION: flags={combo} -> risk_tier_v2={tier} (uw_score={uw}, should be Decline)")
 
 
 def stage_5_dropdowns():

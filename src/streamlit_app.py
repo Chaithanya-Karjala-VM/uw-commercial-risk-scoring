@@ -11,9 +11,11 @@ import plotly.graph_objects as go
 import streamlit as st
 from data_loader import load_data
 from scoring import load_models, score
-from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, group_for_lob, STATE_TO_REGION, CURRENT_YEAR, PRIMARY_CAT_PERIL_OPTIONS
+from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, group_for_lob, STATE_TO_REGION, CURRENT_YEAR, PRIMARY_CAT_PERIL_OPTIONS, region_for_state
 from bind_propensity import NEW_BROKER_DEFAULT_TIER, KNOWN_BROKER_TIER, tier_for_known_broker
 from decision_matrix_reference import RISK_TIER_ORDER, RISK_TIER_INFO
+import driver_explain as dexp
+from narrative import build_narrative, build_banner_summary
 
 st.set_page_config(page_title="Assisted Underwriting", layout="wide")
 
@@ -34,6 +36,15 @@ CARD_BG = "#1B2532" if IS_DARK else "#FFFFFF"
 CARD_BORDER = "#2C394A" if IS_DARK else "#E3E7EF"
 TEXT_MAIN = "#E7ECF3" if IS_DARK else "#1A1A1A"
 TEXT_MUTED = "#A9B4C2" if IS_DARK else "#33404F"
+
+
+def _rgba(hex_color, alpha):
+    """Hex accent color -> a translucent rgba() of it, so a card can be tinted by an outcome
+    color (tier, driver direction) while still sitting on top of the page's own dark/light
+    background rather than fighting it with a flat opaque fill."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
 
 st.markdown(f"""
 <style>
@@ -60,6 +71,22 @@ st.markdown(f"""
     button[data-baseweb="tab"][aria-selected="true"] {{ color: {NAVY}; border-bottom: 3px solid {NAVY}; }}
 
     .section-divider {{ border-top: 2px solid {CARD_BORDER}; margin: 1.6rem 0 1.2rem 0; }}
+
+    /* Drill-down / expander headers ("Technical & audit detail" etc.) - default Streamlit
+    renders these as plain, unweighted text with no relation to the app's own palette. Bold,
+    accent-colored, and sized to read as a real section heading, matching the card headings
+    used everywhere else in the result view. */
+    [data-testid="stExpander"] {{
+        border: 1px solid {CARD_BORDER}; border-radius: 10px; background: {CARD_BG};
+    }}
+    [data-testid="stExpander"] summary {{
+        font-weight: 700 !important; font-size: 1.02rem !important; color: {NAVY} !important;
+        padding: 4px 2px;
+    }}
+    [data-testid="stExpander"] summary p {{
+        font-weight: 700 !important; font-size: 1.02rem !important; color: {NAVY} !important;
+    }}
+    [data-testid="stExpander"] summary:hover p {{ color: {ACCENT} !important; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -127,7 +154,7 @@ with title_col:
     st.caption("Model-driven Loss Propensity scoring for commercial submissions")
 
 tab_submission, tab_portfolio, tab_dashboard = st.tabs(
-    ["Submission", "Portfolio Overview", "Executive Dashboard"]
+    ["What-If Simulator", "Portfolio Overview", "Executive Dashboard"]
 )
 
 # ============================================================================
@@ -480,8 +507,8 @@ with tab_dashboard:
     # ============================================================================
 
 with tab_submission:
-        st.header("Submission")
-        st.caption("Enter the submission details below to generate a model-predicted risk score - "
+        st.header("What-If Simulator")
+        st.caption("Enter submission details to generate a model-predicted risk score - "
                    "applies to any submission received, new business or renewal alike.")
 
         def _reset_tier_to_segment_default():
@@ -533,51 +560,79 @@ with tab_submission:
         group = group_for_lob(lob)
         is_property = group == "property"
         st.caption(
-            f"Showing **{'property/building' if is_property else 'business operations'}** inputs for "
-            f"{lob}. Fields greyed out below aren't part of this line's model."
+            f"Showing **{'property/building' if is_property else 'business operations'}** inputs for {lob}."
         )
 
         with st.form("submission_form"):
-            col1, col2, col3, col4 = st.columns(4)
+            if is_property:
+                col1, col2, col3, col4 = st.columns(4)
+            else:
+                col1, col3, col4 = st.columns(3)
 
             with col1:
-                st.markdown("**Property**")
-                construction_type = st.selectbox("Construction Type", CATEGORICAL_OPTIONS["construction_type"], disabled=not is_property)
-                year_built = st.number_input("Year Built", 1910, CURRENT_YEAR, 2000, disabled=not is_property)
-                built_to_code = st.selectbox("Built to Current Code", ["No", "Yes"], disabled=not is_property) == "Yes"
-                num_stories = st.number_input("Number of Stories", 1, 11, 2, disabled=not is_property)
-                square_footage = st.number_input("Square Footage", 1000, 268000, 5000, disabled=not is_property)
-                total_insured_value_usd = st.number_input("Total Insured Value ($)", 40000, 25000000, 500000, step=10000, disabled=not is_property)
-                occupancy_type = st.selectbox("Occupancy Type", CATEGORICAL_OPTIONS["occupancy_type"], disabled=not is_property)
-                roof_age_years = st.number_input("Roof Age (years)", 1, 120, 15, disabled=not is_property)
-                roof_type = st.selectbox("Roof Type", CATEGORICAL_OPTIONS["roof_type"], disabled=not is_property)
-                sprinklered_flag = st.selectbox("Sprinklered", CATEGORICAL_OPTIONS["sprinklered_flag"], disabled=not is_property)
-                fire_protection_class_iso_ppc = st.slider("Fire Protection Class (ISO PPC, 1=best)", 1, 10, 5, disabled=not is_property)
+                if is_property:
+                    st.markdown("**Property & Workforce**")
+                    st.caption("Property")
+                    construction_type = st.selectbox("Construction Type", CATEGORICAL_OPTIONS["construction_type"])
+                    year_built = st.number_input("Year Built", 1910, CURRENT_YEAR, 2000)
+                    built_to_code = st.selectbox("Built to Current Code", ["No", "Yes"]) == "Yes"
+                    num_stories = st.number_input("Number of Stories", 1, 11, 2)
+                    square_footage = st.number_input("Square Footage", 1000, 268000, 5000)
+                    total_insured_value_usd = st.number_input("Total Insured Value ($)", 40000, 25000000, 500000, step=10000)
+                    occupancy_type = st.selectbox("Occupancy Type", CATEGORICAL_OPTIONS["occupancy_type"])
+                    roof_age_years = st.number_input("Roof Age (years)", 1, 120, 15)
+                    roof_type = st.selectbox("Roof Type", CATEGORICAL_OPTIONS["roof_type"])
+                    sprinklered_flag = st.selectbox("Sprinklered", CATEGORICAL_OPTIONS["sprinklered_flag"])
+                    fire_protection_class_iso_ppc = st.slider("Fire Protection Class (ISO PPC, 1=best)", 1, 10, 5)
+                    # this LOB's own model never uses employee/workforce fields - fixed to the
+                    # form's previous defaults so nothing downstream changes behavior, just no
+                    # longer shown for a line that doesn't need them
+                    number_of_employees, avg_wage_per_employee_usd = 25, 55000
+                    avg_employee_age, avg_weekly_work_hours = 40, 40.0
+                else:
+                    st.markdown("**Property & Workforce**")
+                    st.caption("Business & Workforce")
+                    number_of_employees = st.number_input("Number of Employees", 1, 5000, 25)
+                    avg_wage_per_employee_usd = st.number_input("Avg. Wage per Employee ($)", 46000, 94000, 55000, step=1000)
+                    avg_employee_age = st.number_input("Avg. Employee Age", 19, 66, 40)
+                    avg_weekly_work_hours = st.number_input("Avg. Weekly Work Hours", 18.0, 50.0, 40.0)
+                    # this LOB's own model never uses building/property fields - fixed to the
+                    # form's previous defaults for the same reason as above. flood/earthquake/
+                    # wildfire tier and TIV are the one exception: appetite_capacity.py's
+                    # CAT/TIV penalty reads them for every LOB, not just property, so these 4
+                    # specifically still need a real (if neutral) value even though this line's
+                    # own risk model never looks at them.
+                    construction_type, year_built, built_to_code = "Fire Resistive", 2000, False
+                    num_stories, square_footage = 2, 5000
+                    total_insured_value_usd = 500000
+                    occupancy_type, roof_age_years, roof_type = "Office", 15, "Tile"
+                    sprinklered_flag, fire_protection_class_iso_ppc = "Y", 5
+                    distance_to_fire_station_miles, distance_to_fire_hydrant_miles = 5.0, 0.5
+                    fire_alarm_monitoring_type = "Central Station Monitored"
+                    flood_zone_tier, earthquake_zone_tier, wildfire_zone_tier, wind_zone_tier = "Low", "Low", "Low", "Low"
+                    fema_flood_zone_code, soil_liquefaction_class = "X", "A - Hard Rock"
+                    primary_cat_peril_exposure = "Low/Minimal CAT Exposure"
+                    distance_to_coast_miles, distance_to_fault_line_miles = 60.0, 60.0
+                    distance_to_nearest_water_body_miles = 3.0
 
-            with col2:
-                st.markdown("**Location Hazard**")
-                distance_to_fire_station_miles = st.number_input("Distance to Fire Station (miles)", 0.1, 22.0, 5.0, disabled=not is_property)
-                distance_to_fire_hydrant_miles = st.number_input("Distance to Fire Hydrant (miles)", 0.0, 3.0, 0.5, disabled=not is_property)
-                fire_alarm_monitoring_type = st.selectbox("Fire Alarm Monitoring", CATEGORICAL_OPTIONS["fire_alarm_monitoring_type"], disabled=not is_property)
-                flood_zone_tier = st.selectbox("Flood Zone Tier", CATEGORICAL_OPTIONS["tier"], disabled=not is_property)
-                fema_flood_zone_code = st.selectbox("FEMA Flood Zone Code", CATEGORICAL_OPTIONS["fema_flood_zone_code"], disabled=not is_property)
-                earthquake_zone_tier = st.selectbox("Earthquake Zone Tier", CATEGORICAL_OPTIONS["tier"], disabled=not is_property)
-                soil_liquefaction_class = st.selectbox("Soil Liquefaction Class", CATEGORICAL_OPTIONS["soil_liquefaction_class"], disabled=not is_property)
-                wildfire_zone_tier = st.selectbox("Wildfire Zone Tier", CATEGORICAL_OPTIONS["tier"], disabled=not is_property)
-                wind_zone_tier = st.selectbox("Wind Zone Tier", CATEGORICAL_OPTIONS["tier"], disabled=not is_property)
-                primary_cat_peril_exposure = st.selectbox(
-                    "Primary CAT Peril Exposure", PRIMARY_CAT_PERIL_OPTIONS, disabled=not is_property,
-                    help="The dominant catastrophe peril this risk is exposed to.")
-                distance_to_coast_miles = st.number_input("Distance to Coast (miles)", 0.0, 800.0, 60.0, disabled=not is_property)
-                distance_to_fault_line_miles = st.number_input("Distance to Fault Line (miles)", 0.0, 400.0, 60.0, disabled=not is_property)
-                distance_to_nearest_water_body_miles = st.number_input("Distance to Nearest Water Body (miles)", 0.0, 50.0, 3.0, disabled=not is_property)
-
-                st.markdown("**Business & Workforce**")
-                industry_class_naics = st.selectbox("Industry Class (NAICS)", INDUSTRY_OPTIONS, disabled=is_property)
-                number_of_employees = st.number_input("Number of Employees", 1, 5000, 25, disabled=is_property)
-                avg_wage_per_employee_usd = st.number_input("Avg. Wage per Employee ($)", 46000, 94000, 55000, step=1000, disabled=is_property)
-                avg_employee_age = st.number_input("Avg. Employee Age", 19, 66, 40, disabled=is_property)
-                avg_weekly_work_hours = st.number_input("Avg. Weekly Work Hours", 18.0, 50.0, 40.0, disabled=is_property)
+            if is_property:
+                with col2:
+                    st.markdown("**Location Hazard**")
+                    distance_to_fire_station_miles = st.number_input("Distance to Fire Station (miles)", 0.1, 22.0, 5.0)
+                    distance_to_fire_hydrant_miles = st.number_input("Distance to Fire Hydrant (miles)", 0.0, 3.0, 0.5)
+                    fire_alarm_monitoring_type = st.selectbox("Fire Alarm Monitoring", CATEGORICAL_OPTIONS["fire_alarm_monitoring_type"])
+                    flood_zone_tier = st.selectbox("Flood Zone Tier", CATEGORICAL_OPTIONS["tier"])
+                    fema_flood_zone_code = st.selectbox("FEMA Flood Zone Code", CATEGORICAL_OPTIONS["fema_flood_zone_code"])
+                    earthquake_zone_tier = st.selectbox("Earthquake Zone Tier", CATEGORICAL_OPTIONS["tier"])
+                    soil_liquefaction_class = st.selectbox("Soil Liquefaction Class", CATEGORICAL_OPTIONS["soil_liquefaction_class"])
+                    wildfire_zone_tier = st.selectbox("Wildfire Zone Tier", CATEGORICAL_OPTIONS["tier"])
+                    wind_zone_tier = st.selectbox("Wind Zone Tier", CATEGORICAL_OPTIONS["tier"])
+                    primary_cat_peril_exposure = st.selectbox(
+                        "Primary CAT Peril Exposure", PRIMARY_CAT_PERIL_OPTIONS,
+                        help="The dominant catastrophe peril this risk is exposed to.")
+                    distance_to_coast_miles = st.number_input("Distance to Coast (miles)", 0.0, 800.0, 60.0)
+                    distance_to_fault_line_miles = st.number_input("Distance to Fault Line (miles)", 0.0, 400.0, 60.0)
+                    distance_to_nearest_water_body_miles = st.number_input("Distance to Nearest Water Body (miles)", 0.0, 50.0, 3.0)
 
             with col3:
                 st.markdown("**Claims History**")
@@ -604,6 +659,10 @@ with tab_submission:
                 competing_quotes_count = st.number_input("Competing Quotes Count", 0, 10, 2)
                 risk_state = st.selectbox("State", sorted(STATE_TO_REGION.keys()), index=sorted(STATE_TO_REGION.keys()).index("CA"))
                 coverage_limit_requested_usd = st.number_input("Coverage Limit Requested ($)", 50000, 50000000, 500000, step=10000)
+                industry_class_naics = st.selectbox(
+                    "Industry Class (NAICS)", INDUSTRY_OPTIONS,
+                    help="Used for portfolio industry-concentration checks - applies to every "
+                         "line, not just this submission's own risk model.")
 
                 st.markdown("**Compliance & Appetite**")
                 sanctions_flag = st.selectbox("Sanctions/OFAC Watchlist Hit", ["No", "Yes"]) == "Yes"
@@ -612,7 +671,7 @@ with tab_submission:
                 region_lob_restricted_flag = st.selectbox("Region x LOB Restricted", ["No", "Yes"]) == "Yes"
                 target_growth_segment_flag = st.selectbox("Target Growth Segment", ["No", "Yes"]) == "Yes"
 
-            submitted = st.form_submit_button("Score Submission", type="primary")
+            submitted = st.form_submit_button("Calculate", type="primary")
 
         if submitted:
             building_age_years = CURRENT_YEAR - year_built
@@ -674,38 +733,188 @@ with tab_submission:
                 st.error(f"Scoring failed: {e}")
                 st.stop()
 
-            st.subheader("Result")
+            # driver attribution needs risk_location_region explicitly - score() derives it
+            # internally from State but doesn't hand it back to the caller's own row, and
+            # bind_drivers() needs the real one (not a silent Gulf Coast default) to identify
+            # the actual region driver correctly
+            row_dict = row.iloc[0].to_dict()
+            row_dict["risk_location_region"] = region_for_state(risk_state)
 
-            def mini_gauge(value, title, good_dir_low=True):
-                if good_dir_low:
-                    color = GOOD if value < 30 else (WARN if value < 60 else BAD)
-                else:
-                    color = BAD if value < 30 else (WARN if value < 60 else GOOD)
-                fig = go.Figure(go.Indicator(
-                    mode="gauge+number", value=value, number={"font": {"size": 26}},
-                    gauge={"axis": {"range": [0, 100], "tickwidth": 1}, "bar": {"color": color, "thickness": 0.35}},
-                    title={"text": title, "font": {"size": 13}},
-                ))
-                fig.update_layout(height=190, margin=dict(l=15, r=15, t=40, b=5))
+            def _score_fn(df):
+                return score(df, models).iloc[0]
+
+            loss_drv = dexp.loss_drivers(row, _score_fn)
+            bind_drv = dexp.bind_drivers(row_dict)
+            appetite_drv = dexp.appetite_drivers(row_dict)
+
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+            def _section_label(text):
+                st.markdown(
+                    f'<div style="color:{NAVY}; font-size:0.92rem; font-weight:800; '
+                    f'letter-spacing:0.04em; margin-bottom:10px;">{text}</div>', unsafe_allow_html=True
+                )
+
+            def _sub_label(text):
+                st.markdown(
+                    f'<div style="color:{ACCENT}; font-size:0.85rem; font-weight:700; '
+                    f'letter-spacing:0.02em; margin-bottom:6px;">{text}</div>', unsafe_allow_html=True
+                )
+
+            # ---- Underwriting Result banner ----
+            # Full card tinted by the outcome's own tier color (not just the left accent strip)
+            # so the result reads at a glance, before a word of text is read - a translucent
+            # tint of the tier color over the page's own background, not a flat opaque fill,
+            # so it still sits correctly in both light and dark theme.
+            tier = result["risk_tier_v2"]
+            banner_color = TIER_COLORS[tier]
+            banner_bg = _rgba(banner_color, 0.16 if IS_DARK else 0.09)
+            banner_border = _rgba(banner_color, 0.5)
+            summary_line = build_banner_summary(result, loss_drv, bind_drv)
+            st.markdown(f"""
+            <div style="background:{banner_bg}; border:1px solid {banner_border}; border-left:6px solid {banner_color};
+                        border-radius: 10px; padding: 20px 24px; margin-bottom: 1rem;">
+                <div style="color:{TEXT_MUTED}; font-size:0.78rem; font-weight:700; letter-spacing:0.06em;">UNDERWRITING RESULT</div>
+                <div style="color:{banner_color}; font-size:1.6rem; font-weight:800; margin: 4px 0 10px 0;">{tier}</div>
+                <div style="color:{TEXT_MAIN}; font-size:0.95rem;"><b>Recommended Action:</b> {result['recommended_uw_action_v2']}</div>
+                <div style="color:{TEXT_MUTED}; font-size:0.9rem; margin-top:6px;">{summary_line}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # ---- Narrative (deterministic template - see narrative.py) ----
+            narrative_text = build_narrative(result, loss_drv, bind_drv, appetite_drv)
+            st.markdown(f"""
+            <div style="background:{CARD_BG}; border:1px solid {CARD_BORDER}; border-radius:10px;
+                        padding:16px 20px; margin-bottom:1rem;">
+                <div style="color:{TEXT_MUTED}; font-weight:700; font-size:0.78rem; letter-spacing:0.05em; margin-bottom:8px;">NARRATIVE</div>
+                <div style="color:{TEXT_MAIN}; font-size:0.95rem; line-height:1.7;">{narrative_text}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # ---- Key Factors chips ----
+            chip_source = loss_drv[:2] + bind_drv[:2] + appetite_drv[:2]
+            seen, chips = set(), []
+            for d in chip_source:
+                if d["label"] not in seen:
+                    chips.append(d["label"]); seen.add(d["label"])
+            if chips:
+                chip_bg = _rgba(ACCENT, 0.14 if IS_DARK else 0.10)
+                chip_border = _rgba(ACCENT, 0.45)
+                chip_html = "".join(
+                    f'<span style="background:{chip_bg}; border:1px solid {chip_border}; border-radius:20px; '
+                    f'padding:6px 16px; margin:3px 6px 3px 0; display:inline-block; font-size:0.85rem; '
+                    f'font-weight:600; color:{TEXT_MAIN};">{c}</span>' for c in chips
+                )
+                with st.container(border=True):
+                    _section_label("KEY FACTORS BEHIND THIS DECISION")
+                    st.markdown(f'<div style="margin:-2px 0 0 0;">{chip_html}</div>', unsafe_allow_html=True)
+                st.markdown('<div style="height:1rem;"></div>', unsafe_allow_html=True)
+
+            # ---- KPI cards ----
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Composite UW Score", f"{result['uw_score_v2']:.1f}/100")
+            k2.metric("Loss Propensity Score", f"{result['loss_propensity_score_v2']:.1f}")
+            k3.metric("Bind Propensity Score", f"{result['bind_propensity_score_v2']:.1f}")
+            k4.metric("Appetite Score", f"{result['appetite_capacity_score_v2']:.1f}")
+
+            p1, p2, p3 = st.columns(3)
+            p1.metric("Technical Premium", f"${result['indicated_annual_premium_usd']:,.0f}")
+            quoted = result["quoted_premium_usd"]
+            p2.metric("Quoted Premium", f"${quoted:,.0f}" if quoted == quoted else "Not Quoted")
+            p3.metric("Probability of Large Loss", f"{result['p_large_loss']*100:.1f}%")
+
+            # ---- Why This Score - live driver bar charts, one consistent card ----
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+            def _driver_bar(drivers, good_direction):
+                if not drivers:
+                    return None
+                labels = [d["label"] for d in drivers][::-1]
+                values = [d["weight"] if d["direction"] != good_direction else -d["weight"] for d in drivers][::-1]
+                colors = [BAD if v > 0 else GOOD for v in values]
+                fig = go.Figure(go.Bar(x=values, y=labels, orientation="h", marker_color=colors))
+                fig.update_layout(
+                    height=max(200, 44 * len(drivers)), margin=dict(l=10, r=10, t=10, b=10),
+                    xaxis=dict(showticklabels=False, zeroline=True, zerolinecolor=CARD_BORDER, zerolinewidth=2),
+                    yaxis=dict(tickfont=dict(size=12)), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color=TEXT_MAIN),
+                )
                 return fig
 
-            g1, g2, g3, g4 = st.columns(4)
-            g1.plotly_chart(mini_gauge(result["loss_propensity_score_v2"], "Loss Propensity (0=best)"), width='stretch')
-            g2.plotly_chart(mini_gauge(result["bind_propensity_score_v2"], "Bind Propensity (100=best)", good_dir_low=False), width='stretch')
-            g3.plotly_chart(mini_gauge(result["appetite_capacity_score_v2"], "Appetite/Capacity (100=best)", good_dir_low=False), width='stretch')
-            g4.plotly_chart(mini_gauge(result["uw_score_v2"], "Final UW Score (100=best)", good_dir_low=False), width='stretch')
+            # st.container(border=True) - the correct, native way to wrap real Streamlit
+            # widgets (columns, Plotly charts) in one visually consistent card. An earlier
+            # version of this tried to open an HTML <div> in one st.markdown() call and close
+            # it in a later one, spanning the widgets in between - that doesn't actually nest
+            # in the page's DOM, since each st.markdown()/element call renders as its own
+            # isolated fragment, not one continuous HTML document.
+            with st.container(border=True):
+                _section_label("WHY THIS SCORE")
+                st.caption("Top factors behind each score, measured against the real book's own typical "
+                           "submission. Red bars push the outcome the wrong way; green bars help it.")
+                d1, d2, d3 = st.columns(3)
+                with d1:
+                    _sub_label("Loss Risk Drivers")
+                    fig = _driver_bar(loss_drv, good_direction="decreases")
+                    if fig:
+                        st.plotly_chart(fig, width="stretch")
+                    else:
+                        st.info("No material drivers vs. the book baseline.")
+                with d2:
+                    _sub_label("Bind Propensity Drivers")
+                    fig = _driver_bar(bind_drv, good_direction="increases")
+                    if fig:
+                        st.plotly_chart(fig, width="stretch")
+                    else:
+                        st.info("No material drivers vs. the book baseline.")
+                with d3:
+                    _sub_label("Appetite / Eligibility Drivers")
+                    fig = _driver_bar(appetite_drv, good_direction="increases")
+                    if fig:
+                        st.plotly_chart(fig, width="stretch")
+                    else:
+                        st.info("No eligibility penalties. Clean appetite profile.")
 
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Annual Premium", f"${result['indicated_annual_premium_usd']:,.0f}")
-            m2.metric("Predicted Loss Ratio", f"{result['predicted_loss_ratio_pct']:.1f}%")
-            m3.metric("Probability of Large Loss", f"{result['p_large_loss']*100:.1f}%")
-            m4.metric("Total Expected Loss Cost", f"${result['total_expected_loss_cost']:,.0f}")
+            # ---- Technical & audit detail ----
+            with st.expander("Technical & audit detail"):
+                st.caption("Every figure below is deterministic and reproducible. The same inputs always "
+                           "produce the same output. The narrative above only explains these numbers in "
+                           "plain English; it never alters them.")
+                tab_calc, tab_reason = st.tabs(["Full calculation", "Reason codes"])
 
-            if result["appetite_capacity_score_v2"] == 0:
-                st.error("Outside Appetite - hard-rule gate failed (sanctions, insolvency, restricted operations, or region/LOB restriction). Decline regardless of loss or bind scores.")
-            elif result["uw_score_v2"] >= 65:
-                st.success("High-priority submission under this model - good risk, in appetite, likely to bind.")
-            elif result["uw_score_v2"] >= 45:
-                st.warning("Standard priority under this model.")
-            else:
-                st.error("Low priority under this model - review recommended.")
+                with tab_calc:
+                    loading_pct = result["premium_loading_pct"]
+                    calc_rows = [
+                        ("Hard Stop", bool(result["appetite_capacity_score_v2"] == 0)),
+                        ("Line of Business", result["line_of_business"]),
+                        ("Predicted Claim Frequency", round(result["predicted_frequency"], 4)),
+                        ("Predicted Attritional Severity ($)", round(result["predicted_attritional_severity"], 0)),
+                        ("Probability of Large Loss", round(result["p_large_loss"], 4)),
+                        ("Expected Large-Loss Severity ($)", round(result["expected_large_severity"], 0)),
+                        ("Total Expected Loss Cost ($)", round(result["total_expected_loss_cost"], 0)),
+                        ("Technical Premium ($)", round(result["indicated_annual_premium_usd"], 0)),
+                        ("Premium Loading", f"{loading_pct*100:.0f}%" if loading_pct == loading_pct else "N/A - not quoted"),
+                        ("Quoted Premium ($)", round(quoted, 0) if quoted == quoted else "Not Quoted"),
+                        ("Predicted Loss Ratio (%)", round(result["predicted_loss_ratio_pct"], 1)),
+                        ("Loss Propensity Score", round(result["loss_propensity_score_v2"], 1)),
+                        ("Bind Propensity Score", round(result["bind_propensity_score_v2"], 1)),
+                        ("Appetite/Capacity Score", round(result["appetite_capacity_score_v2"], 1)),
+                        ("Composite UW Score", round(result["uw_score_v2"], 1)),
+                        ("Risk Tier", result["risk_tier_v2"]),
+                        ("Appetite Decision", result["appetite_capacity_decision_v2"]),
+                        ("Recommended Action", result["recommended_uw_action_v2"]),
+                    ]
+                    st.dataframe(pd.DataFrame(calc_rows, columns=["Field", "Value"]), width="stretch", hide_index=True)
+
+                with tab_reason:
+                    reason_rows = (
+                        [{"Category": "Loss", "Driver": d["label"], "Direction": d["direction"], "Relative Weight": d["weight"]} for d in loss_drv]
+                        + [{"Category": "Bind", "Driver": d["label"], "Direction": d["direction"], "Relative Weight": d["weight"]} for d in bind_drv]
+                        + [{"Category": "Appetite", "Driver": d["label"], "Direction": d["direction"], "Relative Weight": d["weight"]} for d in appetite_drv]
+                    )
+                    if reason_rows:
+                        st.dataframe(
+                            pd.DataFrame(reason_rows), width="stretch", hide_index=True,
+                            column_config={"Relative Weight": st.column_config.NumberColumn("Relative Weight", format="%.1f")},
+                        )
+                    else:
+                        st.info("No material drivers to rank for this submission.")

@@ -10,7 +10,7 @@ import joblib
 from lob_config import group_for_lob, encode_ordinal_tiers, region_for_state
 from bind_propensity import compute_bind_propensity, populate_broker_fields, BIND_COEFFICIENTS
 from appetite_capacity import compute_appetite_capacity_score, compute_appetite_decision, hard_rule_pass
-from decision_matrix_reference import tier_for_score, RISK_TIER_INFO
+from decision_matrix_reference import tier_for_score, RISK_TIER_INFO, RISK_TIER_PREMIUM_LOADING
 
 # fitted appetite coefficients - see appetite_capacity.verify_appetite_formula() docstring
 # for how these were derived and re-verify if the source data changes
@@ -237,9 +237,31 @@ def score(df, models, term_col="policy_term_months"):
     # file's frozen original columns (risk_tier, appetite_capacity_decision, etc.), which
     # never move no matter what changes in the scoring pipeline. See scoring.py's module
     # docstring / project notes for why that distinction matters.
-    out["risk_tier_v2"] = out["uw_score_v2"].apply(tier_for_score)
+    #
+    # real bug found 2026-08 while building the What-If Simulator's narrative panel: the
+    # documented rule is "Decline: < 38, OR any hard-rule fail" (decision_matrix_reference.py's
+    # own RISK_TIER_INFO text), but tier_for_score() only ever looks at the blended uw_score_v2
+    # number. Since appetite is only 30% of that blend, a hard-rule failure (which forces
+    # appetite to exactly 0) can still leave uw_score_v2 sitting in Standard/High territory if
+    # loss and bind happen to be good enough to carry the other 70% - e.g. a submission with a
+    # sanctions hit but otherwise clean loss/bind scores landed in "High" with a "rate
+    # adjustment" action instead of "Decline"/"refer," directly contradicting the documented
+    # rule. Force Decline whenever the hard-rule gate failed, regardless of what the blended
+    # score alone would suggest.
+    hard_rule_failed = out["appetite_capacity_score_v2"] == 0
+    out["risk_tier_v2"] = np.where(hard_rule_failed, "Decline", out["uw_score_v2"].apply(tier_for_score))
     out["appetite_capacity_decision_v2"] = compute_appetite_decision(out, APPETITE_FIT_COEFFICIENTS)
     out["recommended_uw_action_v2"] = out["risk_tier_v2"].map(lambda t: RISK_TIER_INFO[t]["uw_action"])
+    # the technical premium (indicated_annual_premium_usd) has no risk adjustment baked in -
+    # this applies the SAME rate loading the app already documents per tier (RISK_TIER_INFO's
+    # pricing_guidance text), as a real number rather than only descriptive text. Decline maps
+    # to NaN - per its own pricing_guidance ("Refer - do not auto-quote"), there is no adjusted
+    # premium to show, since it isn't quoted at all.
+    loading = out["risk_tier_v2"].map(RISK_TIER_PREMIUM_LOADING)
+    out["premium_loading_pct"] = loading
+    out["quoted_premium_usd"] = np.where(
+        loading.notna(), (out["indicated_annual_premium_usd"] * (1 + loading.fillna(0))).round(0), np.nan
+    )
     out["decline_review_reason_v2"] = out.apply(_decline_review_reason, axis=1)
     out["priority_strength_reason_v2"] = out.apply(_priority_strength_reason, axis=1)
     watch = out.apply(_watch_flags, axis=1, result_type="expand")
