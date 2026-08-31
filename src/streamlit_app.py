@@ -841,8 +841,6 @@ with tab_submission:
             # accent-colored expander-header CSS already defined for Technical & audit detail
             # applies automatically to every st.expander() on the page, so these pick up the
             # same heading treatment for free just by using one.
-            quoted = result["quoted_premium_usd"]
-
             with st.expander("Key Factors Behind This Decision"):
                 chip_source = loss_drv[:2] + bind_drv[:2] + appetite_drv[:2]
                 seen, chips = set(), []
@@ -861,16 +859,15 @@ with tab_submission:
                 else:
                     st.info("No single field dominates this read - a balanced profile overall.")
 
-            with st.expander("Score Breakdown & Premium"):
+            with st.expander("Score Breakdown"):
                 k1, k2, k3, k4 = st.columns(4)
                 k1.metric("Composite UW Score", f"{result['uw_score_v2']:.1f}/100")
                 k2.metric("Loss Propensity Score", f"{result['loss_propensity_score_v2']:.1f}")
                 k3.metric("Bind Propensity Score", f"{result['bind_propensity_score_v2']:.1f}")
                 k4.metric("Appetite Score", f"{result['appetite_capacity_score_v2']:.1f}")
 
-                p1, p2 = st.columns(2)
-                p1.metric("Burning Cost", f"${result['indicated_annual_premium_usd']:,.0f}")
-                p2.metric("Probability of Large Loss", f"{result['p_large_loss']*100:.1f}%")
+                p1, _, _, _ = st.columns(4)
+                p1.metric("Probability of Large Loss", f"{result['p_large_loss']*100:.1f}%")
 
             def _driver_bar(drivers, good_direction):
                 if not drivers:
@@ -921,7 +918,6 @@ with tab_submission:
                 tab_calc, tab_reason = st.tabs(["Full calculation", "Reason codes"])
 
                 with tab_calc:
-                    loading_pct = result["premium_loading_pct"]
                     calc_rows = [
                         ("Hard Stop", bool(result["appetite_capacity_score_v2"] == 0)),
                         ("Line of Business", result["line_of_business"]),
@@ -930,9 +926,6 @@ with tab_submission:
                         ("Probability of Large Loss", round(result["p_large_loss"], 4)),
                         ("Expected Large-Loss Severity ($)", round(result["expected_large_severity"], 0)),
                         ("Total Expected Loss Cost ($)", round(result["total_expected_loss_cost"], 0)),
-                        ("Burning Cost ($)", round(result["indicated_annual_premium_usd"], 0)),
-                        ("Premium Loading", f"{loading_pct*100:.0f}%" if loading_pct == loading_pct else "N/A - not quoted"),
-                        ("Quoted Premium ($)", round(quoted, 0) if quoted == quoted else "Not Quoted"),
                         ("Predicted Loss Ratio (%)", round(result["predicted_loss_ratio_pct"], 1)),
                         ("Loss Propensity Score", round(result["loss_propensity_score_v2"], 1)),
                         ("Bind Propensity Score", round(result["bind_propensity_score_v2"], 1)),
