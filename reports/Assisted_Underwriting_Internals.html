@@ -1,0 +1,795 @@
+<title>Assisted Underwriting Internals</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,600;8..60,700&family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --paper:#F3F5F9; --paper-raise:#FFFFFF; --ink:#16202C; --ink-soft:#4A5568;
+  --navy:#1F3864; --navy-2:#2E5090; --line:#D7DEE8; --line-strong:#B9C4D6;
+  --good:#1E8449; --warn:#B7950B; --bad:#B03A2E;
+  --good-bg:#E7F5EC; --warn-bg:#FBF3DE; --bad-bg:#FBEAE7; --navy-bg:#E9EFF9;
+  --mono-bg:#EBEFF5; --shadow:0 1px 3px rgba(22,32,44,0.08), 0 1px 2px rgba(22,32,44,0.05);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0F1622; --paper-raise:#161F2E; --ink:#E7ECF3; --ink-soft:#A9B4C2;
+    --navy:#7DA6F5; --navy-2:#9AB9F8; --line:#26313F; --line-strong:#324259;
+    --good:#3FC97F; --warn:#E0B23D; --bad:#E5685A;
+    --good-bg:#173627; --warn-bg:#3A2F14; --bad-bg:#3A2019; --navy-bg:#1B2740;
+    --mono-bg:#141D2B; --shadow:0 1px 3px rgba(0,0,0,0.35);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0F1622; --paper-raise:#161F2E; --ink:#E7ECF3; --ink-soft:#A9B4C2;
+  --navy:#7DA6F5; --navy-2:#9AB9F8; --line:#26313F; --line-strong:#324259;
+  --good:#3FC97F; --warn:#E0B23D; --bad:#E5685A;
+  --good-bg:#173627; --warn-bg:#3A2F14; --bad-bg:#3A2019; --navy-bg:#1B2740;
+  --mono-bg:#141D2B; --shadow:0 1px 3px rgba(0,0,0,0.35);
+}
+*{box-sizing:border-box;}
+body{
+  background:var(--paper); color:var(--ink); margin:0;
+  font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+  font-size:16.5px; line-height:1.65; -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,h4{font-family:'Source Serif 4',Georgia,serif; text-wrap:balance; color:var(--ink); font-weight:700; margin:0;}
+code, .mono, table{font-variant-numeric:tabular-nums;}
+code, kbd, .mono-text{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;}
+a{color:var(--navy-2);}
+p{max-width:70ch;}
+::selection{background:var(--navy); color:var(--paper-raise);}
+
+/* ---------- layout shell ---------- */
+.shell{display:grid; grid-template-columns:272px minmax(0,860px); gap:0 3rem; max-width:1240px; margin:0 auto; padding:0 1.5rem 6rem;}
+@media (max-width:980px){ .shell{grid-template-columns:1fr; max-width:760px;} .toc{position:static !important; max-height:none !important;} }
+
+/* ---------- masthead ---------- */
+.masthead{grid-column:1/-1; padding:3.2rem 0 2.4rem; border-bottom:1px solid var(--line);}
+.masthead .kicker{font-family:'IBM Plex Mono',monospace; font-size:0.78rem; letter-spacing:0.14em; text-transform:uppercase; color:var(--navy); font-weight:600;}
+.masthead h1{font-size:2.6rem; margin-top:0.5rem; line-height:1.08;}
+.masthead .sub{color:var(--ink-soft); font-size:1.08rem; margin-top:0.9rem; max-width:62ch;}
+.masthead .meta-row{display:flex; gap:1.6rem; flex-wrap:wrap; margin-top:1.4rem; font-family:'IBM Plex Mono',monospace; font-size:0.8rem; color:var(--ink-soft);}
+.masthead .meta-row b{color:var(--ink); font-weight:600;}
+
+/* ---------- toc ---------- */
+.toc{position:sticky; top:2rem; align-self:start; max-height:calc(100vh - 4rem); overflow-y:auto; padding:1.6rem 0 2rem;}
+.toc-label{font-family:'IBM Plex Mono',monospace; font-size:0.72rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:0.8rem;}
+.toc ol{list-style:none; margin:0; padding:0; counter-reset:tocnum;}
+.toc li{counter-increment:tocnum; margin-bottom:0.15rem;}
+.toc a{display:flex; gap:0.55rem; text-decoration:none; color:var(--ink-soft); font-size:0.87rem; padding:0.3rem 0.4rem; border-radius:6px; line-height:1.3;}
+.toc a:hover{background:var(--navy-bg); color:var(--navy);}
+.toc a::before{content:counter(tocnum,decimal-leading-zero); font-family:'IBM Plex Mono',monospace; color:var(--line-strong); font-size:0.78rem; flex:none; padding-top:0.05rem;}
+
+/* ---------- content column ---------- */
+.content{min-width:0; padding-top:2.2rem;}
+section.chapter{padding:2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem;}
+section.chapter:last-child{border-bottom:none;}
+.eyebrow{font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:var(--navy); letter-spacing:0.04em; margin-bottom:0.5rem; display:flex; align-items:center; gap:0.5rem;}
+.eyebrow .num{color:var(--line-strong);}
+section.chapter h2{font-size:1.7rem; margin-bottom:0.2rem;}
+section.chapter h3{font-size:1.18rem; color:var(--navy); margin-top:1.8rem; margin-bottom:0.6rem;}
+section.chapter h4{font-size:1.0rem; color:var(--ink); margin-top:1.3rem; margin-bottom:0.4rem; font-family:'Inter',sans-serif; font-weight:700;}
+.dek{color:var(--ink-soft); font-size:1.02rem; margin-top:0.7rem; max-width:64ch;}
+
+/* ---------- callouts ---------- */
+.callout{border-left:4px solid var(--navy-2); background:var(--navy-bg); border-radius:0 10px 10px 0; padding:0.95rem 1.15rem; margin:1.1rem 0; max-width:68ch;}
+.callout .label{font-family:'IBM Plex Mono',monospace; font-size:0.72rem; letter-spacing:0.1em; text-transform:uppercase; font-weight:600; margin-bottom:0.35rem; display:block;}
+.callout p{margin:0; font-size:0.95rem;}
+.callout p + p{margin-top:0.5rem;}
+.callout.bug{border-color:var(--bad); background:var(--bad-bg);} .callout.bug .label{color:var(--bad);}
+.callout.assumption{border-color:var(--navy-2); background:var(--navy-bg);} .callout.assumption .label{color:var(--navy-2);}
+.callout.verified{border-color:var(--good); background:var(--good-bg);} .callout.verified .label{color:var(--good);}
+.callout.limitation{border-color:var(--warn); background:var(--warn-bg);} .callout.limitation .label{color:var(--warn);}
+
+/* ---------- tables ---------- */
+.tbl-wrap{overflow-x:auto; margin:1rem 0; border:1px solid var(--line); border-radius:10px;}
+table{border-collapse:collapse; width:100%; font-size:0.88rem; min-width:480px;}
+th,td{padding:0.55rem 0.85rem; text-align:left; border-bottom:1px solid var(--line); white-space:nowrap;}
+th{background:var(--paper-raise); font-family:'IBM Plex Mono',monospace; font-size:0.72rem; letter-spacing:0.05em; text-transform:uppercase; color:var(--ink-soft); font-weight:600;}
+td{color:var(--ink); font-family:'IBM Plex Mono',monospace; font-size:0.85rem;}
+td:first-child, th:first-child{font-family:'Inter',sans-serif; font-size:0.9rem; white-space:normal;}
+tr:last-child td{border-bottom:none;}
+tr:hover td{background:var(--paper-raise);}
+.tbl-wrap table td.wrap, .tbl-wrap table th.wrap{white-space:normal;}
+
+/* ---------- code ---------- */
+pre{background:var(--mono-bg); border:1px solid var(--line); border-radius:10px; padding:1rem 1.2rem; overflow-x:auto; margin:1rem 0; max-width:100%;}
+pre code{font-family:'IBM Plex Mono',monospace; font-size:0.82rem; line-height:1.6; color:var(--ink); white-space:pre;}
+p code, li code{background:var(--mono-bg); padding:0.1rem 0.35rem; border-radius:4px; font-size:0.86rem;}
+
+/* ---------- misc ---------- */
+ul,ol{max-width:66ch; padding-left:1.3rem;} li{margin-bottom:0.35rem;}
+.pillrow{display:flex; gap:0.5rem; flex-wrap:wrap; margin:0.8rem 0;}
+.pill{font-family:'IBM Plex Mono',monospace; font-size:0.76rem; padding:0.3rem 0.7rem; border-radius:20px; border:1px solid var(--line-strong); color:var(--ink-soft);}
+details{border:1px solid var(--line); border-radius:10px; margin:1.1rem 0; background:var(--paper-raise); max-width:100%;}
+details summary{cursor:pointer; padding:0.8rem 1.1rem; font-weight:600; font-size:0.92rem; color:var(--navy); list-style:none; display:flex; align-items:center; gap:0.5rem;}
+details summary::-webkit-details-marker{display:none;}
+details summary::before{content:"▸"; font-size:0.75rem; transition:transform 0.15s;}
+details[open] summary::before{transform:rotate(90deg);}
+details .inner{padding:0 1.1rem 1.1rem;}
+.stat-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:0.8rem; margin:1.1rem 0;}
+.stat{background:var(--paper-raise); border:1px solid var(--line); border-radius:10px; padding:0.9rem 1rem; box-shadow:var(--shadow);}
+.stat .k{font-family:'IBM Plex Mono',monospace; font-size:0.7rem; letter-spacing:0.06em; text-transform:uppercase; color:var(--ink-soft);}
+.stat .v{font-family:'IBM Plex Mono',monospace; font-size:1.35rem; font-weight:600; color:var(--navy); margin-top:0.2rem;}
+.badge{display:inline-block; font-family:'IBM Plex Mono',monospace; font-size:0.72rem; padding:0.15rem 0.55rem; border-radius:5px; font-weight:600;}
+.badge.good{background:var(--good-bg); color:var(--good);} .badge.warn{background:var(--warn-bg); color:var(--warn);} .badge.bad{background:var(--bad-bg); color:var(--bad);}
+hr.rule{border:none; border-top:1px solid var(--line); margin:1.6rem 0;}
+.foot{grid-column:1/-1; text-align:center; padding:3rem 0 1rem; color:var(--ink-soft); font-size:0.85rem; font-family:'IBM Plex Mono',monospace;}
+</style>
+
+<div class="shell">
+
+  <div class="masthead">
+    <div class="kicker">Engineering reference — commercial lines risk scoring</div>
+    <h1>Assisted Underwriting Internals</h1>
+    <div class="sub">Everything the pipeline does, from the raw Excel book to the number an underwriter sees on screen — the data, the six models underneath the four scores, every bug found and fixed along the way, what was tried and rejected, and an honest read on how good each part actually is.</div>
+    <div class="meta-row">
+      <span><b>20,000</b> submissions · <b>165</b> columns</span>
+      <span><b>8</b> lines of business</span>
+      <span><b>6</b> models + 2 rules engines</span>
+      <span>Local pipeline — Python 3, scikit-learn, statsmodels, Streamlit</span>
+    </div>
+  </div>
+
+  <nav class="toc">
+    <div class="toc-label">Contents</div>
+    <ol>
+      <li><a href="#mental-model">The mental model</a></li>
+      <li><a href="#tech-stack">Tech stack &amp; why</a></li>
+      <li><a href="#data">The data</a></li>
+      <li><a href="#features">Features &amp; leakage guards</a></li>
+      <li><a href="#frequency">Frequency model</a></li>
+      <li><a href="#severity">Severity model</a></li>
+      <li><a href="#largeloss">Large-loss model</a></li>
+      <li><a href="#lossprop">Loss Propensity Score</a></li>
+      <li><a href="#bind">Bind Propensity</a></li>
+      <li><a href="#appetite">Appetite / Capacity</a></li>
+      <li><a href="#composite">Composite UW Score &amp; tiers</a></li>
+      <li><a href="#premium">Premium &amp; quoting</a></li>
+      <li><a href="#drivers">Driver attribution</a></li>
+      <li><a href="#narrative">Narrative text</a></li>
+      <li><a href="#app">The Streamlit app</a></li>
+      <li><a href="#validation">Validation &amp; full-book results</a></li>
+      <li><a href="#scorecard">Honest scorecard</a></li>
+      <li><a href="#bugs">Every bug found &amp; fixed</a></li>
+      <li><a href="#rejected">Tried and rejected</a></li>
+      <li><a href="#hardcoded">Assumptions &amp; hardcoded values</a></li>
+      <li><a href="#walkthrough">A submission, start to end</a></li>
+    </ol>
+  </nav>
+
+  <main class="content">
+
+    <!-- 1 -->
+    <section class="chapter" id="mental-model">
+      <div class="eyebrow"><span class="num">01</span> overview</div>
+      <h2>The mental model</h2>
+      <p class="dek">One sentence: an underwriter fills in a submission, and the pipeline turns it into four scores — how much it's likely to cost in claims, how likely it is to actually bind, whether it fits the book's appetite and capacity, and one blended number that drives the tier and the rate.</p>
+
+      <p>There is no single model. There are <b>six</b> trained statistical models and <b>two</b> hand-built rules engines, chained together:</p>
+      <div class="stat-grid">
+        <div class="stat"><div class="k">Frequency</div><div class="v">2 GLMs</div></div>
+        <div class="stat"><div class="k">Severity</div><div class="v">2 GLM/GBM</div></div>
+        <div class="stat"><div class="k">Large-loss</div><div class="v">2 classifiers</div></div>
+        <div class="stat"><div class="k">Bind</div><div class="v">rules engine</div></div>
+        <div class="stat"><div class="k">Appetite</div><div class="v">rules engine</div></div>
+      </div>
+      <p>"2" for frequency/severity/large-loss because each is trained <b>twice</b> — once for property lines (Commercial Property, BOP, Inland Marine), once for liability lines (Workers Comp, General Liability, Professional Liability, Umbrella/Excess, Commercial Auto). Property and liability risk are rated on genuinely different logic (a building burning down vs. an employee getting hurt), so they were never pooled into one model.</p>
+
+      <p>The four scores an underwriter actually sees:</p>
+      <ul>
+        <li><b>Loss Propensity Score</b> (0=best, 100=worst) — output of the three ML models, blended into a predicted loss ratio.</li>
+        <li><b>Bind Propensity Score</b> (0–100, higher=more likely to bind) — a rules-based formula, not a trained model.</li>
+        <li><b>Appetite/Capacity Score</b> (0–100) — a rules-based formula with a hard veto gate.</li>
+        <li><b>Composite UW Score</b> (0–100) — a fixed weighted blend of the three above, which sets the risk tier.</li>
+      </ul>
+
+      <div class="callout assumption">
+        <span class="label">Why rules, not models, for Bind and Appetite</span>
+        <p>The source file has no historical "did this submission actually bind" outcome column, and Appetite is fundamentally a policy decision (sanctions lists, concentration caps, capacity treaties), not a pattern to be learned from data. Both were rebuilt as real formulas — reverse-engineered by regressing against the file's own stored scores — rather than force-fit into a model that would just be learning noise. See <a href="#bind">§9</a> and <a href="#appetite">§10</a>.</p>
+      </div>
+    </section>
+
+    <!-- 2 -->
+    <section class="chapter" id="tech-stack">
+      <div class="eyebrow"><span class="num">02</span> stack</div>
+      <h2>Tech stack, and why each piece</h2>
+      <div class="tbl-wrap"><table>
+        <tr><th>Library</th><th>Version</th><th>Used for</th></tr>
+        <tr><td>pandas</td><td>3.0.2</td><td>All data handling — schema-driven Excel load, feature frames, scoring output</td></tr>
+        <tr><td>numpy</td><td>2.4.4</td><td>Array math, clipping, monotonic-constraint arrays</td></tr>
+        <tr><td>scikit-learn</td><td>1.8.0</td><td>PoissonRegressor, GammaRegressor, LogisticRegression, HistGradientBoosting*, preprocessing pipelines</td></tr>
+        <tr><td>statsmodels</td><td>0.14.6</td><td>GLM dispersion diagnostics (frequency model only)</td></tr>
+        <tr><td>scipy</td><td>1.17.1</td><td>Generalized Pareto Distribution fit (large-loss severity), significance tests during audits</td></tr>
+        <tr><td>joblib</td><td>1.5.3</td><td>Serializes trained models to <code>.joblib</code> for the app to load without retraining</td></tr>
+        <tr><td>openpyxl</td><td>&ge;3.1</td><td>Reads the source <code>.xlsx</code> book and its Data Dictionary tab</td></tr>
+        <tr><td>Streamlit</td><td>&ge;1.61</td><td>The entire UI — three tabs, no separate frontend/backend split</td></tr>
+        <tr><td>Plotly</td><td>&ge;6.0</td><td>Every chart — histograms, gauge-style bars, driver bar charts</td></tr>
+      </table></div>
+      <p>No cloud service, no external API, nothing paid. Everything trains and runs from a local Python environment against one Excel file. This was a deliberate constraint throughout, not an oversight — see <a href="#rejected">§19</a> for the one place this was actually reconsidered (an LLM call for narrative text) and why it was turned down.</p>
+    </section>
+
+    <!-- 3 -->
+    <section class="chapter" id="data">
+      <div class="eyebrow"><span class="num">03</span> <code>data_loader.py</code></div>
+      <h2>The data</h2>
+      <p class="dek">One source file: <code>UW_Risk_Score_Commercial_F.xlsx</code>, 20,000 real (synthetic-but-realistic) commercial submissions across 165 columns, plus a Data Dictionary tab that tags what every column is actually for.</p>
+
+      <div class="stat-grid">
+        <div class="stat"><div class="k">Rows</div><div class="v">20,000</div></div>
+        <div class="stat"><div class="k">Columns</div><div class="v">165</div></div>
+        <div class="stat"><div class="k">Output/derived cols</div><div class="v">32</div></div>
+        <div class="stat"><div class="k">Lines of business</div><div class="v">8</div></div>
+        <div class="stat"><div class="k">Brokers</div><div class="v">60</div></div>
+        <div class="stat"><div class="k">States</div><div class="v">31</div></div>
+      </div>
+
+      <h3>Schema is read from the file, not hand-typed</h3>
+      <p><code>data_loader.py</code> parses the Data Dictionary tab itself — column name, spreadsheet letter, and a tag for what each column is <code>usable_for</code> (Loss / Bind / Appetite / General / output) — then renames the raw Sample Data columns to match. Every other script imports this one loader, so there's one definition of "what column means what," not eight copies drifting apart.</p>
+      <div class="tbl-wrap"><table>
+        <tr><th>Tag</th><th>Columns</th><th>Meaning</th></tr>
+        <tr><td>General</td><td>74</td><td>Descriptive / structural fields — some genuinely risk-relevant and pulled into features anyway (see §4)</td></tr>
+        <tr><td>Loss</td><td>35</td><td>Feeds the frequency/severity/large-loss models</td></tr>
+        <tr><td>output (derived)</td><td>32</td><td>The file's own pre-computed scores — used only to verify formula reconstructions, never as a live input</td></tr>
+        <tr><td>Appetite</td><td>9</td><td>Feeds the Appetite/Capacity formula</td></tr>
+        <tr><td>Bind, Broker Segmentation</td><td>7</td><td>Broker relationship history, feeds Bind Propensity</td></tr>
+        <tr><td>Bind</td><td>6</td><td>Deal-specific bind factors (competing quotes, quote-to-bind days)</td></tr>
+        <tr><td>Loss, Appetite</td><td>2</td><td>Dual-tagged fields used by both</td></tr>
+      </table></div>
+
+      <h3>Property vs. liability lines</h3>
+      <div class="tbl-wrap"><table>
+        <tr><th>Group</th><th>Lines</th><th>Rows</th></tr>
+        <tr><td>Property</td><td>Commercial Property, Business Owners Package (BOP), Inland Marine</td><td>8,199</td></tr>
+        <tr><td>Liability</td><td>Workers Compensation, General Liability, Professional Liability, Umbrella/Excess, Commercial Auto</td><td>11,801</td></tr>
+      </table></div>
+      <p>Split by <code>line_of_business</code> and rated on entirely different exposure logic — property scales with the value of a building (TIV), liability scales with headcount and payroll. Every one of the six ML models is trained twice, once per group.</p>
+    </section>
+
+    <!-- 4 -->
+    <section class="chapter" id="features">
+      <div class="eyebrow"><span class="num">04</span> <code>lob_config.py</code></div>
+      <h2>Features, and keeping the future out of the past</h2>
+      <p class="dek">The single most important rule in the whole pipeline: a model can only see what an underwriter would actually know at the moment of quoting — never anything that only exists because a claim already happened.</p>
+
+      <h3>What's excluded, and why</h3>
+      <p><code>CLAIM_OUTCOME_COLS</code> is a hard exclusion list applied to every feature set, no exceptions: claim counts, claim severity, incurred amounts, large-claim flags, litigation flags, hospital visit counts — anything that only exists <i>after</i> a claim. These are the targets models predict, never inputs.</p>
+
+      <div class="callout verified">
+        <span class="label">Verified, not assumed</span>
+        <p><code>claims_free_years</code> looks like it could be leakage (a field that's suspiciously perfect at predicting claims), so it was checked directly: among rows that <i>do</i> have a current-period claim, is <code>claims_free_years</code> still often positive? Yes — confirmed genuinely backward-looking, safe to use. <code>data_audit.py</code> §4 re-runs this exact check on demand.</p>
+      </div>
+
+      <h4>Explicit-window history over ambiguous totals</h4>
+      <p><code>claim_count_last_3_years</code> and <code>large_loss_count_last_5_years</code> are used in place of the file's <code>prior_claim_count</code> / <code>prior_total_incurred_usd</code> pair — the "prior" fields don't specify a window, which makes them impossible to reason about consistently across submissions of different tenure.</p>
+
+      <h4>"General"-tagged fields pulled in anyway</h4>
+      <p>A handful of fields are tagged <code>General</code> in the dictionary (not <code>Loss</code>) but are genuinely risk-relevant, so they're in the feature sets regardless of their tag: <code>roof_type</code>, <code>num_stories</code>, <code>built_to_current_code_flag</code>, distance to fire station/hydrant, <code>business_tenure_years</code>, <code>revenue_growth_trend_pct</code>, <code>debt_to_equity_ratio</code>, <code>avg_weekly_work_hours</code> (WC-specific).
+
+      <div class="callout bug">
+        <span class="label">Found &amp; fixed — <code>year_built</code> redundancy</span>
+        <p>Correlation with <code>building_age_years</code>: <code>-0.9999999999999999</code>. Feeding both to a model as separate features is pure multicollinearity, and was a real contributor to the erratic, non-monotonic scoring an 8-line-of-business audit turned up. <code>year_built</code> is still a live form field (it's how an underwriter naturally thinks), but it now only feeds <code>building_age_years</code> — it was removed from the model feature list entirely.</p>
+      </div>
+
+      <div class="callout verified">
+        <span class="label">One genuinely new field added, and it had to earn its spot</span>
+        <p><code>primary_cat_peril_exposure</code> (the dominant catastrophe peril type — Wildfire / Flood-Storm Surge / Earthquake / Wind-Hail / Elevated-Multiple / Low-Minimal) was chi-square tested against the large-claim flag before being added: <b>p = 0.008</b>, genuinely significant. Every other untested categorical field checked the same way (business description, occupancy type alone, industry, water-body type, region) came back <b>p &gt; 0.05</b> — noise from thin per-category counts on a rare target — and was left out.</p>
+      </div>
+
+      <h3>Ordinal tiers, encoded to respect their order</h3>
+      <p>Flood/Earthquake/Wildfire/Wind zone tiers arrive as text — Low/Moderate/High/Severe. One-hot encoding would throw away the fact that they're <i>ordered</i>, which breaks monotonic constraints (see §5). <code>encode_ordinal_tiers()</code> maps them to integers 0–3 instead, consistently, everywhere they're used.</p>
+
+      <h3>State → Region, derived not typed</h3>
+      <p>31 states map to 8 regions with a confirmed clean 1:1 relationship (zero exceptions across all 20,000 rows) — so the live form only asks for State, and Region is derived automatically wherever a model needs it.</p>
+    </section>
+
+    <!-- 5 -->
+    <section class="chapter" id="frequency">
+      <div class="eyebrow"><span class="num">05</span> <code>frequency_model.py</code></div>
+      <h2>Frequency model</h2>
+      <p class="dek">Predicts <i>how many claims</i> a submission is expected to generate — the first of the three inputs that get blended into Loss Propensity.</p>
+
+      <h3>Target &amp; method</h3>
+      <p>Poisson GLM (<code>sklearn.linear_model.PoissonRegressor</code>) racing a monotonic-constrained gradient-boosted tree (<code>HistGradientBoostingRegressor</code>, Poisson loss). Whichever wins on held-out deviance is what actually gets saved and used — not a fixed choice.</p>
+
+      <div class="callout bug">
+        <span class="label">Found &amp; fixed — the exposure-unit collapse</span>
+        <p>An 8-line-of-business audit found predicted frequency barely moving across the <i>entire</i> real range of headcount or building value — 0.28 at 1 employee vs. 0.18 at 5,000 employees — because both were just ordinary features the model had to learn a relationship for, not treated as an explicit exposure multiplier the way policy term already was. Meanwhile premium scales <i>exactly</i> linearly with both, so loss ratio collapsed toward zero at scale for purely mechanical reasons, regardless of real risk.</p>
+        <p>Fix: standard actuarial practice — fit a <b>per-unit rate</b> and multiply by the exposure units explicitly, the same way <code>exposure_years</code> (from policy term) already worked. Property's unit is $1M of TIV; liability's is 1 employee. The unit column is removed from that group's own feature list (it becomes a multiplier, not something the model fits a coefficient for).</p>
+      </div>
+
+      <h3>Monotonic constraints — the real-world direction every field is forced to respect</h3>
+      <p>A GBM left unconstrained will happily fit a wiggly, non-monotonic curve to noise — e.g. "risk goes up, then down, then up again" as building age increases, just because that pattern existed in a few hundred training rows. Every numeric feature gets a <code>monotonic_cst</code> direction, so the tree can only ever move the prediction the real-world-sensible way.</p>
+      <div class="tbl-wrap"><table>
+        <tr><th>Field</th><th>Direction</th><th>Basis</th></tr>
+        <tr><td>financial_stability_score</td><td>&darr; risk</td><td>Standard — more stable, fewer claims</td></tr>
+        <tr><td>claim_count_last_3_years, large_loss_count_last_5_years</td><td>&uarr; risk</td><td>Standard — history repeats</td></tr>
+        <tr><td>claims_free_years</td><td>&darr; risk</td><td>Standard</td></tr>
+        <tr><td>building_age_years, roof_age_years, fire_protection_class_iso_ppc</td><td>&uarr; risk</td><td>Standard property physical-risk factors</td></tr>
+        <tr><td>distance_to_coast/fault_line/water_body</td><td>&darr; risk (closer=worse)</td><td>Standard CAT exposure</td></tr>
+        <tr><td>distance_to_fire_station/hydrant</td><td>&uarr; risk (farther=worse)</td><td>Standard</td></tr>
+        <tr><td>flood/earthquake/wildfire/wind zone tier</td><td>&uarr; risk</td><td>Standard, ordinal-encoded (see §4)</td></tr>
+        <tr><td>revenue_growth_trend_pct</td><td>&darr; risk</td><td>Declining revenue &rarr; financial distress &rarr; higher risk</td></tr>
+        <tr><td>business_tenure_years</td><td>&darr; risk</td><td>Newer business &rarr; less track record &rarr; higher risk</td></tr>
+        <tr><td>avg_weekly_work_hours</td><td>&uarr; risk</td><td>More hours worked &rarr; more exposure</td></tr>
+        <tr><td>avg_employee_age</td><td>&uarr; risk</td><td class="wrap"><span class="badge warn">judgment call</span> no universal consensus — real WC pricing commonly loads for older-worker claims taking longer/costing more, even though frequency alone may not rise with age</td></tr>
+        <tr><td>avg_wage_per_employee_usd</td><td>&darr; risk</td><td class="wrap"><span class="badge warn">judgment call</span> higher wage commonly proxies for more skilled, less physically hazardous work — not a universal rule</td></tr>
+        <tr><td>debt_to_equity_ratio</td><td>&uarr; risk (constraint) — <b>dropped</b> in practice</td><td>see callout below</td></tr>
+      </table></div>
+
+      <div class="callout bug">
+        <span class="label">Found &amp; fixed — 76-point swings from unconstrained fields</span>
+        <p>Before this pass, <code>revenue_growth_trend_pct</code>, <code>business_tenure_years</code>, <code>avg_weekly_work_hours</code>, <code>avg_employee_age</code> and <code>avg_wage_per_employee_usd</code> had no constraint at all. The 8-LOB audit found them swinging the score by up to <b>76 points</b> via non-monotonic, erratic patterns purely from undertrained noise. All five now carry an explicit, documented direction.</p>
+      </div>
+
+      <h3>The drop-and-refit safeguard</h3>
+      <p>Even with a monotonic constraint requested, the <i>linear</i> GLM half is fit first and checked: if any coefficient's sign contradicts its declared real-world direction, that field is dropped and the model is refit without it, rather than trusting a contradicted assumption. This fired for <b>9 property fields</b> (including <code>debt_to_equity_ratio</code>, <code>wind_zone_tier</code>, and — after investigation, correctly — <code>revenue_growth_trend_pct</code> / <code>business_tenure_years</code> whose direction flipped on this particular book) and <b>2 liability fields</b> on the current retrain.</p>
+      <div class="callout verified">
+        <span class="label">Re-checked specifically, this session</span>
+        <p><code>debt_to_equity_ratio</code>'s dropped, backwards-looking sign was tested directly against real claims rather than assumed: significant for Property (p=0.037 / p=0.0075) but the effect is negligible — r&asymp;-0.02 to -0.03, roughly 0.05% of variance, almost certainly confounded (larger, more-established businesses use more leverage <i>and</i> have better risk management). For Liability it isn't even significant (p=0.79 / 0.94). Dropping it is the correct call, not a bug — flipping the constraint to chase a razor-thin, confounded correlation would be fitting noise.</p>
+      </div>
+
+      <h3>Train / test split — by time, not randomly</h3>
+      <p>Rows are sorted by <code>effective_date</code> and split 75/25 — the model trains only on the earlier 75% and is scored on the later 25% it has never seen, in time order. A random shuffle-split would let the model "see the future" in a loose sense (a submission from the same broker, same week, ends up on both sides of the split); the time-based split is the honest test of whether the model actually generalizes forward.</p>
+
+      <h3>Metrics — verified fresh this session</h3>
+      <div class="tbl-wrap"><table>
+        <tr><th>Group</th><th>Predictors used</th><th>Rows</th><th>GLM deviance</th><th>Dispersion</th><th>GBM deviance</th><th>Chosen</th></tr>
+        <tr><td>Property</td><td>23 of 32</td><td>8,199</td><td>1.3228</td><td>1.145</td><td>1.3853</td><td>GLM</td></tr>
+        <tr><td>Liability</td><td>11 of 13</td><td>11,801</td><td>0.0232</td><td>1.751</td><td>0.0276</td><td>GLM</td></tr>
+      </table></div>
+      <p>Dispersion near 1.0 means the Poisson assumption (variance &asymp; mean) roughly holds; property's 1.145 is mild overdispersion, liability's 1.751 more so — expected on real claims data and not a sign of a broken model, just a reminder the count process is somewhat noisier than a textbook Poisson.</p>
+    </section>
+
+    <!-- 6 -->
+    <section class="chapter" id="severity">
+      <div class="eyebrow"><span class="num">06</span> <code>severity_model.py</code></div>
+      <h2>Severity model</h2>
+      <p class="dek">Predicts the expected dollar amount of a claim, <i>given one happens</i> — attritional (ordinary) claims only. Large claims are handled entirely separately (§7), on the reasoning that a fire that destroys a building and a fire that singes a doormat are not draws from the same distribution.</p>
+
+      <h3>Attritional-only split</h3>
+      <p>Every claim above this file's own peril-specific <code>large_claim_threshold_usd</code> is excluded before fitting — 123 large property claims and 178 large liability claims held out, leaving 2,552 and 3,729 attritional claims respectively to fit the severity curve on.</p>
+
+      <h3>Gamma GLM vs. monotonic GBM</h3>
+      <p>Same race pattern as frequency — <code>GammaRegressor</code> (Gamma is the standard actuarial distribution for a strictly-positive, right-skewed claim-severity target) against a monotonic <code>HistGradientBoostingRegressor</code> with <code>loss="gamma"</code>. Same <code>MONOTONIC_DIRECTION</code> table as frequency, with one difference: <b>employees and TIV stay as ordinary constrained features here</b> rather than becoming an explicit exposure multiplier — a bigger operation plausibly costs more <i>per claim</i> when one happens, even though claim <i>count</i> needed the exposure-unit fix instead.</p>
+
+      <div class="callout limitation">
+        <span class="label">A known asymmetry, not an oversight</span>
+        <p>Unlike frequency and large-loss, severity's GLM has no drop-and-refit safeguard for a contradicting coefficient sign — it goes straight to fit-and-compare. The GBM half is still monotonically constrained, so the deployed model (whichever wins) can't misbehave on sign; the GLM alone, if it ever won, could in principle carry an unconstrained coefficient. On the current data GBM wins Property and GLM wins Liability — worth knowing this asymmetry exists if the data changes materially.</p>
+      </div>
+
+      <h3>Metrics — verified fresh this session</h3>
+      <div class="tbl-wrap"><table>
+        <tr><th>Group</th><th>Claims fit on</th><th>Large claims excluded</th><th>GLM MAE</th><th>GBM MAE</th><th>Chosen</th></tr>
+        <tr><td>Property</td><td>2,552</td><td>123</td><td>$1,594</td><td>$1,196</td><td>GBM</td></tr>
+        <tr><td>Liability</td><td>3,729</td><td>178</td><td>$3,361</td><td>$3,570</td><td>GLM</td></tr>
+      </table></div>
+    </section>
+
+    <!-- 7 -->
+    <section class="chapter" id="largeloss">
+      <div class="eyebrow"><span class="num">07</span> <code>large_loss_model.py</code></div>
+      <h2>Large-loss model</h2>
+      <p class="dek">Two parts: <b>will</b> a large loss happen (a classifier), and <b>how big</b> is it if it does (Generalized Pareto, an extreme-value distribution built for exactly this — modeling the tail beyond a threshold, not the whole distribution).</p>
+
+      <h3>Its own threshold, not a generic percentile</h3>
+      <p>"Large" is peril-specific, not one flat dollar figure: PML-based for property, AOA-based for liability, a flat $75,000 for Workers Comp, policy-limit-based for auto — each line's own real per-LOB median <code>large_claim_threshold_usd</code>, computed fresh from the book.</p>
+      <div class="tbl-wrap"><table>
+        <tr><th>Line</th><th>Threshold</th></tr>
+        <tr><td>Commercial Property</td><td>$21,273</td></tr>
+        <tr><td>Inland Marine</td><td>$21,530</td></tr>
+        <tr><td>Business Owners Package (BOP)</td><td>$26,097</td></tr>
+        <tr><td>Professional Liability</td><td>$33,056</td></tr>
+        <tr><td>General Liability</td><td>$34,704</td></tr>
+        <tr><td>Umbrella/Excess</td><td>$35,226</td></tr>
+        <tr><td>Commercial Auto</td><td>$46,465</td></tr>
+        <tr><td>Workers Compensation</td><td>$75,000</td></tr>
+      </table></div>
+
+      <h3>Part A — will it happen (Logistic vs. GBM classifier)</h3>
+      <p>Same drop-and-refit safeguard as frequency: on a thin positive-class sample, a wrong-signed coefficient is treated as noise. 10 property fields and 7 liability fields were dropped this way on the current retrain.</p>
+
+      <div class="callout limitation">
+        <span class="label">The honest weak point of the whole pipeline</span>
+        <p>Target prevalence is <b>1.5%</b> on both groups — 123 positive property rows, 178 positive liability rows, out of 8,199 and 11,801 respectively. That is genuinely too thin a signal for any model to learn a reliable pattern from, and it shows: <b>Property AUC 0.465</b> (worse than a coin flip), <b>Liability AUC 0.542</b> (barely better than one). This isn't a code bug — it was investigated directly this project (more features, different model families, rebalancing were all tried) and the ceiling is the data itself: catastrophic/large losses are rare by nature, and 20,000 submissions just doesn't contain enough of them to fit a model that generalizes. See the honest scorecard in §17.</p>
+      </div>
+
+      <h3>Part B — how big if it does (Generalized Pareto Distribution)</h3>
+      <p>Fit on the excess above each group's threshold, pooled across the group (not per-LOB — too few large-loss rows per individual line to fit a stable tail separately).</p>
+      <div class="tbl-wrap"><table>
+        <tr><th>Group</th><th>n (large losses)</th><th>GPD shape</th><th>GPD scale</th></tr>
+        <tr><td>Property</td><td>123</td><td>0.610</td><td>$32,204</td></tr>
+        <tr><td>Liability</td><td>178</td><td>0.477</td><td>$70,092</td></tr>
+      </table></div>
+      <p>A positive shape parameter means a genuinely heavy right tail — the kind of distribution where the biggest few losses matter disproportionately, which matches how large commercial claims actually behave.</p>
+    </section>
+
+    <!-- 8 -->
+    <section class="chapter" id="lossprop">
+      <div class="eyebrow"><span class="num">08</span> <code>scoring.py</code></div>
+      <h2>Loss Propensity Score — combining the three</h2>
+      <p class="dek">The three models above don't each produce a score — they produce raw predictions that get combined into one number: an expected loss ratio, then clipped to a 0–100 display score.</p>
+
+      <h3>The math, in order</h3>
+      <pre><code>exposure_years   = policy_term_months / 12
+exposure_units   = TIV/$1M (property)  or  employees (liability)
+predicted_frequency = frequency_model.predict(X) * exposure_years * exposure_units
+
+predicted_attritional_severity = severity_model.predict(X)
+p_large_loss                   = large_loss_model.predict_proba(X)
+
+expected_large_severity = (this LOB's large-claim threshold + GPD mean excess)
+                           * (this submission's severity / this LOB's avg severity)
+
+attritional_freq = max(predicted_frequency - p_large_loss, 0)
+total_expected_loss_cost = attritional_freq * predicted_attritional_severity
+                          + p_large_loss * expected_large_severity
+
+predicted_loss_ratio_pct = total_expected_loss_cost / premium * 100
+loss_propensity_score_v2 = clip(predicted_loss_ratio_pct, 0, 100)   # display only</code></pre>
+
+      <div class="callout assumption">
+        <span class="label">Why the ratio is scaled by severity, not used flat</span>
+        <p><code>expected_large_severity</code> starts from the group's flat threshold-plus-tail figure, then scales it by how this specific submission's <i>attritional</i> severity compares to its line's average — a submission already running hotter-than-average on ordinary claims is assumed to run hotter-than-average on a large one too, clipped to a sane 0.3&times;–3.0&times; band so one outlier field can't send it to an absurd extreme.</p>
+      </div>
+
+      <h3>The raw ratio vs. the display score — this matters for driver attribution</h3>
+      <p><code>predicted_loss_ratio_pct</code> has no ceiling; <code>loss_propensity_score_v2</code> is clipped to 0–100 for display. This distinction directly caused and then fixed a real bug — see §13.</p>
+    </section>
+
+    <!-- 9 -->
+    <section class="chapter" id="bind">
+      <div class="eyebrow"><span class="num">09</span> <code>bind_propensity.py</code></div>
+      <h2>Bind Propensity</h2>
+      <p class="dek">Rules-based, not trained — reconstructed via linear regression against the file's own stored <code>bind_propensity_score_0_100</code>, then frozen as a fixed formula.</p>
+
+      <div class="stat-grid">
+        <div class="stat"><div class="k">Fit quality</div><div class="v">R&sup2; 0.9847</div></div>
+        <div class="stat"><div class="k">Avg error</div><div class="v">0.73 pts</div></div>
+        <div class="stat"><div class="k">Within 3 pts</div><div class="v">100.0%</div></div>
+      </div>
+      <p>Ingredients: broker hit/bind ratio, renewal retention, product &amp; geo diversity, profitability score, quote-to-bind days, competing quotes, submission completeness, plus Region and Channel as categorical dummies, plus TIV and Coverage Limit.</p>
+
+      <div class="callout assumption">
+        <span class="label">A manager-directed inclusion, disclosed as such</span>
+        <p>TIV and Coverage Limit are in the formula even though they added negligible fit improvement on this dataset (checked directly: R&sup2; moved from 0.9272 to only 0.9274) — kept in per manager direction on the reasoning that real broker/submission data at larger scale may show a relationship this particular 20,000-row file doesn't. Their fitted weights are correspondingly tiny — an honest reflection of weak signal, not artificially inflated to look meaningful.</p>
+      </div>
+
+      <h3>Live inputs are now just Broker Tier — the rest is auto-populated</h3>
+      <p>Underwriters no longer type in the 7 broker-detail fields; they select a Broker Tier (or a Broker Capacity Segment for a brand-new broker), and the real per-tier historical averages are filled in automatically.</p>
+      <div class="tbl-wrap"><table>
+        <tr><th>Tier</th><th>Hit/Bind %</th><th>Retention %</th><th>Profitability</th><th>Quote-to-Bind days</th></tr>
+        <tr><td>Bronze</td><td>38.09</td><td>93.67</td><td>31.61</td><td>15.94</td></tr>
+        <tr><td>Silver</td><td>38.11</td><td>95.01</td><td>39.14</td><td>15.92</td></tr>
+        <tr><td>Gold</td><td>38.21</td><td>96.72</td><td>48.90</td><td>16.05</td></tr>
+        <tr><td>Platinum</td><td>37.46</td><td>98.13</td><td>51.98</td><td>16.09</td></tr>
+      </table></div>
+      <p>Genuinely interesting real finding, not a design choice: hit/bind ratio and quote-to-bind days barely move by tier (38.1% either way) — but retention and profitability move a lot (93.7&rarr;98.1, 31.6&rarr;52.0). Both are honest reflections of the real book, not smoothed to look tidier.</p>
+
+      <div class="callout bug">
+        <span class="label">Found &amp; fixed — Region/Channel silently contributing zero</span>
+        <p><code>pd.get_dummies()</code> only creates a column for a category that's actually present in the current batch, and drops whichever category happens to be alphabetically first among what's present — not necessarily the intended reference level. For a single-row live submission, that meant Region and Channel's real, non-zero fitted coefficients silently never applied — found by testing Channel directly and seeing zero score movement despite a real coefficient. Fixed with explicit equality checks against the full, fixed option lists instead of dummy-encoding whatever happens to be in the batch.</p>
+      </div>
+    </section>
+
+    <!-- 10 -->
+    <section class="chapter" id="appetite">
+      <div class="eyebrow"><span class="num">10</span> <code>appetite_capacity.py</code></div>
+      <h2>Appetite / Capacity</h2>
+      <p class="dek">Rules-based for the same reason as Bind — no historical outcome to train against, and this is a policy decision with a known structure, not a pattern. Two parts: a hard veto gate, and a 0–100 fit-plus-headroom score for everything that clears the gate.</p>
+
+      <h3>The hard-rule gate — necessary, not sufficient</h3>
+      <p>4 flags — sanctions/OFAC watchlist, prior insolvency/bankruptcy, restricted operations, region&times;LOB restriction. Any one <code>True</code> means an automatic 0, confirmed with zero exceptions across all 20,000 rows for that direction of the rule.</p>
+      <div class="callout limitation">
+        <span class="label">Known, disclosed open item — re-verified this session</span>
+        <p>The 4 flags are confirmed <i>necessary</i> but not <i>sufficient</i>: re-checked directly against the file's own stored <code>appetite_hard_rule_pass_flag</code>, 5,181 of 20,000 rows have all 4 flags clear yet the file still marks them failed — meaning some other, unidentified criterion also drives the original gate that isn't recoverable from the columns available (documented in-code as ~70% of clean-flag rows actually passing). The reconstruction here implements exactly the necessary condition and is honest that it can't fully reproduce the rest — an open item, not silently papered over.</p>
+      </div>
+
+      <h3>Fit score — a real linear regression</h3>
+      <div class="stat-grid">
+        <div class="stat"><div class="k">Fit quality</div><div class="v">R&sup2; 0.9774</div></div>
+        <div class="stat"><div class="k">Avg error</div><div class="v">3.30 pts</div></div>
+      </div>
+      <p>Hard-rule pass, target-growth-segment flag, financial stability score, broker tier, submission completeness, coverage limit, plus a CAT/TIV soft penalty layered on top.</p>
+
+      <div class="callout bug">
+        <span class="label">Found &amp; fixed, twice — the CAT/TIV penalty that never fired</span>
+        <p><b>First bug:</b> the penalty compared an already-encoded ordinal integer (0–3) against the literal string <code>"Severe"</code> — always <code>False</code> in the real scoring pipeline, so the penalty silently never applied to a single live submission. Fixed with an <code>_is_severe()</code> helper that checks both representations.</p>
+        <p><b>Second bug, found fixing the first:</b> that helper used <code>dtype == object</code> as its "is this still text" check — but pandas 3.x's default string columns use a newer Arrow-backed string dtype that <i>isn't</i> <code>object</code>, so the check silently fell through to the numeric branch and crashed comparing text to 3. Fixed with <code>pd.api.types.is_numeric_dtype()</code>, robust to whichever string backend pandas is running.</p>
+      </div>
+
+      <h3>Capacity headroom — industry concentration and state reinsurance, tightest wins</h3>
+      <p>Concentration cap is a flat 15% for every industry (confirmed — zero variation across all 10 classes). State headroom is the real per-state average reinsurance binding headroom, and it tells a genuine CAT-exposure story: Oklahoma (&minus;208 pts) and Washington (&minus;172 pts) sit structurally over treaty capacity, not as noise.</p>
+
+      <div class="callout bug">
+        <span class="label">Found &amp; fixed — a single submission scored against itself</span>
+        <p>Industry concentration used to be recomputed from whatever dataframe was passed into <code>score()</code> — correct for a full 20,000-row book re-score, but every single live Submission-tab score calls <code>score()</code> on a <b>one-row</b> dataframe, so that one row's own industry was silently treated as 100% of the reference book every time, for every industry. Forced the headroom component to its floor on almost every live submission. Fixed with a real, fixed <code>INDUSTRY_CONCENTRATION_BY_NAICS</code> constant computed once from the actual 20,000-row book (Manufacturing already sits slightly <i>above</i> the 15% cap at 16.36% — a real, mild constraint).</p>
+      </div>
+
+      <div class="callout bug">
+        <span class="label">Found &amp; fixed — one scale couldn't fit two very different ranges</span>
+        <p>Industry concentration headroom spans roughly &minus;1.4 to +9.1 percentage points across the 10 real classes; state reinsurance headroom spans roughly &minus;208 to +88. One shared multiplier tuned for industry's narrow range made state's much wider range saturate almost immediately — 4 of 31 states (FL, NJ, OK, WA) all floored to the identical score despite genuinely different degrees of constraint. Fixed with two separately-calibrated scales (<code>INDUSTRY_HEADROOM_SCALE=3.0</code>, <code>STATE_HEADROOM_SCALE=0.25</code>) applied <i>before</i> combining, so "tightest constraint governs" actually means something.</p>
+      </div>
+
+      <h3>Final blend &amp; decision thresholds</h3>
+      <pre><code>appetite_capacity_score_v2 = 0.75 * fit_score + 0.25 * headroom_component   (0 if hard-rule failed)</code></pre>
+      <p>Decision bands (Within Appetite / Refer–Marginal Fit / Refer–Capacity Constrained / Decline) use thresholds re-calibrated against the real book's own fit/headroom distributions after the scaling fix above changed them — not a reconstruction of the original file's own category logic, which the docstring is explicit isn't recoverable from the fields available.</p>
+    </section>
+
+    <!-- 11 -->
+    <section class="chapter" id="composite">
+      <div class="eyebrow"><span class="num">11</span> <code>scoring.py</code> / <code>decision_matrix_reference.py</code></div>
+      <h2>Composite UW Score &amp; risk tiers</h2>
+      <pre><code>uw_score_v2 = 0.30 * appetite_capacity_score_v2
+            + 0.20 * bind_propensity_score_v2
+            + 0.50 * (100 - loss_propensity_score_v2)</code></pre>
+      <p>Loss carries half the weight — the single biggest lever on the composite score, matching how underwriting actually prioritizes "will this cost too much" over "will it bind" or "does it fit."</p>
+
+      <div class="tbl-wrap"><table>
+        <tr><th>Tier</th><th>UW score band</th><th>Meaning</th><th>Action</th><th>Rate loading</th></tr>
+        <tr><td><span class="badge good">Preferred</span></td><td>&ge; 72</td><td>Good risk, within appetite, likely to bind</td><td>Fast-track, no rate action</td><td>0%</td></tr>
+        <tr><td><span class="badge good">Standard</span></td><td>55 – 71</td><td>Solid risk, minor watch items</td><td>Rate at technical price</td><td>0%</td></tr>
+        <tr><td><span class="badge warn">High</span></td><td>38 – 54</td><td>Marginal on one or more scores</td><td>Rate adjustment + deductible review</td><td>+15% (midpoint of documented 10–20%)</td></tr>
+        <tr><td><span class="badge bad">Decline</span></td><td>&lt; 38, or any hard-rule fail</td><td>Poor loss view, outside appetite, or capacity-constrained</td><td>Refer to senior underwriter</td><td>not quoted</td></tr>
+      </table></div>
+
+      <div class="callout bug">
+        <span class="label">Found &amp; fixed — the most consequential bug this project found</span>
+        <p>The documented rule is explicit: "Decline: &lt;38, <b>or any hard-rule fail</b>." But tier assignment only ever looked at the blended <code>uw_score_v2</code> number. Since Appetite is only 30% of that blend, a hard-rule failure (which forces Appetite to exactly 0) could still leave the composite sitting in Standard/High territory if Loss and Bind were good enough to carry the other 70% — e.g. a submission with a sanctions hit but otherwise clean scores landed in "High" with a "rate adjustment" action instead of Decline, directly contradicting the documented rule.</p>
+        <p><b>Real impact, measured:</b> 982 of 20,000 real book rows (4.9%) were mis-tiered this way before the fix. Now forced explicitly: <code>risk_tier_v2 = "Decline" if hard_rule_failed else tier_for_score(uw_score_v2)</code>. Verified 0 mis-tiers after.</p>
+      </div>
+    </section>
+
+    <!-- 12 -->
+    <section class="chapter" id="premium">
+      <div class="eyebrow"><span class="num">12</span> <code>scoring.py</code></div>
+      <h2>Premium &amp; quoting</h2>
+      <p>For a brand-new submission with no premium yet, a real per-LOB rate is applied — property against TIV, liability against payroll (headcount &times; average wage).</p>
+      <div class="tbl-wrap"><table>
+        <tr><th>Line</th><th>Rate</th><th>Basis</th></tr>
+        <tr><td>Commercial Property</td><td>0.4484%</td><td>TIV</td></tr>
+        <tr><td>Business Owners Package (BOP)</td><td>0.5045%</td><td>TIV</td></tr>
+        <tr><td>Inland Marine</td><td>0.4270%</td><td>TIV</td></tr>
+        <tr><td>Workers Compensation</td><td>0.4480%</td><td>Payroll</td></tr>
+        <tr><td>General Liability</td><td>0.2230%</td><td>Payroll</td></tr>
+        <tr><td>Professional Liability</td><td>0.1734%</td><td>Payroll</td></tr>
+        <tr><td>Umbrella/Excess</td><td>0.1372%</td><td>Payroll</td></tr>
+        <tr><td>Commercial Auto</td><td>0.1348%</td><td>Payroll</td></tr>
+      </table></div>
+      <p>The existing book's own real, already-varying premium is always preferred when present — this rate table only fires for a genuinely new submission. A LOB outside these 8 falls back to the average of all 8 rather than crashing (see §16).</p>
+      <p>The <b>technical premium</b> (<code>indicated_annual_premium_usd</code>) carries no risk adjustment. The <b>quoted premium</b> applies the tier's rate loading on top — Decline has no quoted premium at all (<code>NaN</code>), consistent with "refer, don't auto-quote."</p>
+    </section>
+
+    <!-- 13 -->
+    <section class="chapter" id="drivers">
+      <div class="eyebrow"><span class="num">13</span> <code>driver_explain.py</code></div>
+      <h2>Driver attribution — "Why This Score"</h2>
+      <p class="dek">Every number on the result screen's driver charts is derived from the exact same formulas already used for the real score — this module only decomposes them, it never changes a prediction.</p>
+
+      <h3>Two different techniques for two different kinds of score</h3>
+      <p>Bind and Appetite are exact linear formulas, so each field's contribution is exact: <code>coefficient &times; (this submission's value &minus; the real book's average for that field)</code>. No estimation, no extra scoring calls.</p>
+      <p>Loss Propensity has no closed form — it's a blend of 3 separately-trained models, not one linear formula. Each candidate field's contribution is measured by literally re-scoring the submission with that one field swapped to its real book baseline and reading the change in the raw loss ratio — the same perturbation technique used throughout this project's own validation work (§15). This was chosen over an off-the-shelf explainer like SHAP specifically because it naturally handles a composite multi-model score without a new dependency — see §19 for the fuller comparison.</p>
+
+      <div class="callout bug">
+        <span class="label">Found &amp; fixed — clipping was hiding real drivers</span>
+        <p>The comparison originally used <code>loss_propensity_score_v2</code> — clipped to [0,100] for display. For a submission whose real loss ratio is, say, 224%, the displayed score stays pinned at exactly 100 no matter which single field gets swapped to baseline — almost every field's swap still leaves the ratio well over 100%, so comparing the <i>clipped</i> score made nearly every genuine driver look like it had zero effect, and falsely spotlighted whichever one field's swap happened to cross the 100% boundary as the only "driver." Fixed by comparing the raw, uncapped <code>predicted_loss_ratio_pct</code> instead — verified against a Commercial Auto scenario that previously showed an empty driver list and now correctly shows all 5.</p>
+      </div>
+
+      <div class="callout bug">
+        <span class="label">Found &amp; fixed — broker fields silently contributing zero</span>
+        <p>A live submission's <code>row_dict</code> only carries <code>broker_tier</code>, not the 7 detail fields the Bind formula actually runs on (those are auto-populated, not typed in — §9). Without populating them first, every one of those 7 terms compared a missing value against itself and read as zero contribution. Fixed by calling the same <code>populate_broker_fields()</code> scoring.py already uses, before decomposing.</p>
+      </div>
+
+      <p>Book baselines — the "typical submission" every driver is measured against — are real medians/modes computed directly from the source book (TIV $472,000, 31 employees, $70,000 average wage, financial stability 57, etc.), not arbitrary neutral values.</p>
+    </section>
+
+    <!-- 14 -->
+    <section class="chapter" id="narrative">
+      <div class="eyebrow"><span class="num">14</span> <code>narrative.py</code></div>
+      <h2>Narrative text</h2>
+      <p class="dek">The paragraph of English under each result is <b>not an LLM call</b> — every sentence is assembled from real computed numbers using pre-written sentence patterns, chosen by a stable hash of the submission's own scores.</p>
+
+      <div class="callout assumption">
+        <span class="label">Deliberately decided against an LLM</span>
+        <p>Discussed directly: cost, added complexity (a new dependency, network calls, latency, non-determinism), against a template approach that's free, instant, and — critically — <b>reproducible</b>: the same submission always reads the same way, which matters for a panel that sits right next to a "Technical &amp; audit detail" drill-down explicitly claiming every figure is deterministic. 2–5 phrasing variants per sentence slot (via <code>hashlib.md5</code>-seeded selection, not Python's <code>random</code>, which reseeds per process) keep different submissions from reading as one template with numbers swapped in, without sacrificing that reproducibility.</p>
+      </div>
+
+      <div class="callout bug">
+        <span class="label">Found &amp; fixed — literal asterisks on a client-facing page</span>
+        <p><code>**bold**</code> markdown syntax doesn't reliably render nested inside a raw HTML block via Streamlit's <code>unsafe_allow_html=True</code> — it leaked through as literal asterisk characters on screen. All markdown bold syntax was removed from the narrative text entirely; emphasis is handled by the page's own HTML/CSS, not by markdown characters embedded in the copy.</p>
+      </div>
+
+      <p>Structure: opening (tier + composite score) &rarr; loss propensity (score + plain-English read + top driver) &rarr; bind propensity (same shape) &rarr; appetite (hard-gate / strong / moderate) &rarr; premium (technical vs. quoted, with the rate load spelled out). No redundant closing "recommended action" sentence — that's already the banner's own headline above it.</p>
+    </section>
+
+    <!-- 15 -->
+    <section class="chapter" id="app">
+      <div class="eyebrow"><span class="num">15</span> <code>streamlit_app.py</code></div>
+      <h2>The Streamlit app</h2>
+      <p class="dek">One file, three tabs, no separate backend — Streamlit re-runs the whole script top to bottom on every interaction, with <code>@st.cache_resource</code>/<code>@st.cache_data</code> keeping the trained models and the scored 20,000-row book from reloading every time.</p>
+
+      <h3>What-If Simulator</h3>
+      <p>The live scoring form. Selecting a Line of Business doesn't just grey out irrelevant fields — <b>fields that genuinely don't apply disappear from the screen entirely</b>. Before doing that, every hidden field was checked against the actual scoring code to confirm it truly isn't used for that line (not just assumed) — CAT-relevant fields (flood/EQ/wildfire tier, TIV) are silently defaulted to their old widget defaults for liability submissions rather than shown, since the backend still technically expects them.</p>
+      <p>Submitting produces: a tier-tinted Underwriting Result banner, a deterministic narrative card, Key Factors chips, 7 KPI cards (composite/loss/bind/appetite scores, technical/quoted premium, probability of large loss), a "Why This Score" panel with three live driver bar-charts (red = pushes the wrong way, green = helps), and a collapsible "Technical &amp; audit detail" drill-down with the full numeric calculation and a reason-codes table.</p>
+
+      <h3>Portfolio Overview</h3>
+      <p>Filterable (LOB, Broker Tier) view of the whole scored book — submission count, average Loss Propensity, portfolio loss ratio, average premium, a score-distribution histogram, and a matching-submissions table.</p>
+
+      <h3>Executive Dashboard</h3>
+      <p>5-way filterable (LOB, Occupancy, Risk Tier, Broker Tier, Renewal/New) portfolio view — the full Underwriting Decision Matrix reference table with real book averages per tier, portfolio visuals, a claims overview, and three decision-output queues: Referral Queue, Priority Opportunities, and an Emerging Risk Watch List built from real, disclosed pre-claim indicators (low financial stability, high debt-to-equity, declining revenue, short tenure, safety findings, severe CAT exposure, high competing-quote pressure) — replacing the source file's own frozen <code>prospective_risk_flags</code> column, which can't be regenerated for a brand-new submission.</p>
+
+      <h3>Visual design pass</h3>
+      <p>Theme-aware throughout (light/dark, reacting to <code>st.context.theme.type</code>) — Inter for UI text, a consistent card system (<code>CARD_BG</code>/<code>CARD_BORDER</code>), and a semantic palette (green/amber/red) matched to tier and driver direction everywhere it appears, not redefined per chart. The result banner is tinted with a translucent wash of its own tier color (not just a colored strip), section headings and the Technical &amp; audit drill-down header are bold and accent-colored rather than default plain text, and Key Factors sits in the same bordered-card treatment as every other section for visual consistency.</p>
+
+      <div class="callout bug">
+        <span class="label">Found &amp; fixed — backend Python leaking onto the screen</span>
+        <p>Three spots used a bare ternary <b>expression statement</b> — <code>st.plotly_chart(fig, ...) if fig else st.info(...)</code> — with the result not assigned to anything. Streamlit's "magic" auto-display quietly renders any unassigned expression's value, so the raw <code>DeltaGenerator</code> object's repr leaked onto the page as visible text. Fixed with proper <code>if/else</code> blocks.</p>
+      </div>
+    </section>
+
+    <!-- 16 -->
+    <section class="chapter" id="validation">
+      <div class="eyebrow"><span class="num">16</span> <code>test_model_behavior.py</code> / <code>combine_scores.py</code></div>
+      <h2>Validation &amp; full-book results</h2>
+      <p class="dek">12 automated stages, re-run after every structural change, plus a full re-score of all 20,000 rows.</p>
+
+      <div class="tbl-wrap"><table>
+        <tr><th>#</th><th>Stage</th><th>What it proves</th><th>Result</th></tr>
+        <tr><td>1</td><td>Best vs. worst case, all 8 lines</td><td>Direction sanity — a clearly-good submission scores better than a clearly-bad one, on all 4 scores, every line</td><td class="wrap"><span class="badge good">8/8</span></td></tr>
+        <tr><td>2</td><td>Monotonicity sweeps</td><td>Every constrained field moves the score the declared direction across its full real range</td><td class="wrap"><span class="badge good">107/107</span></td></tr>
+        <tr><td>3</td><td>Bind sensitivity + independence</td><td>Bind score responds to broker/quote factors and is genuinely independent of risk factors</td><td class="wrap"><span class="badge good">0.10 pt drift (want ~0)</span></td></tr>
+        <tr><td>4</td><td>Appetite hard-rule gate, all 16 flag combos</td><td>Every combination of the 4 gate flags produces the correct pass/fail and correct tier</td><td class="wrap"><span class="badge good">16/16</span></td></tr>
+        <tr><td>5</td><td>Every dropdown option, every relevant line</td><td>No combination of categorical inputs crashes scoring</td><td class="wrap"><span class="badge good">250/250</span></td></tr>
+        <tr><td>6</td><td>Numeric boundary values</td><td>Every field's real min/max scores without crashing or leaving 0–100</td><td class="wrap"><span class="badge good">60/60</span></td></tr>
+        <tr><td>7</td><td>Relative driver strength ranking</td><td>Sanity-checks which fields actually dominate the loss score</td><td class="wrap">flood zone &amp; claim history lead, as expected</td></tr>
+        <tr><td>8</td><td>Unknown-category safety</td><td>A genuinely new LOB/state/broker-tier doesn't crash or silently return NaN</td><td class="wrap"><span class="badge good">5/5 handled</span></td></tr>
+        <tr><td>9</td><td>Appetite independence from batch size</td><td>A single live score matches the same submission scored inside a 5-row batch</td><td class="wrap"><span class="badge good">diff = 0.0</span></td></tr>
+        <tr><td>10</td><td>CAT/TIV penalty actually fires</td><td>The real pipeline, not just the isolated function, applies the penalty</td><td class="wrap"><span class="badge good">9.0 pt penalty, as expected</span></td></tr>
+        <tr><td>11</td><td>Tier / decision consistency</td><td>Risk tier and appetite decision never contradict each other</td><td class="wrap"><span class="badge good">24/24</span></td></tr>
+        <tr><td>12</td><td>Exposure-unit scaling</td><td>Guards against the §5 exposure collapse ever regressing</td><td class="wrap"><span class="badge good">16/16</span></td></tr>
+      </table></div>
+
+      <h3>Full book, re-scored</h3>
+      <div class="stat-grid">
+        <div class="stat"><div class="k">Portfolio loss ratio</div><div class="v">38.4%</div></div>
+        <div class="stat"><div class="k">Unweighted avg</div><div class="v">114.8%</div></div>
+        <div class="stat"><div class="k">Outside appetite</div><div class="v">12.4%</div></div>
+      </div>
+      <p>The unweighted average (114.8%) and the premium-weighted portfolio figure (38.4%) diverge sharply on purpose — a simple average treats a $50K TIV risk and a $5M TIV risk as equally important, which isn't how a real book's economics work. The premium-weighted figure is the one that actually describes the book.</p>
+
+      <div class="tbl-wrap"><table>
+        <tr><th>Line</th><th>Loss ratio</th></tr>
+        <tr><td>Workers Compensation</td><td>17.4%</td></tr>
+        <tr><td>Business Owners Package (BOP)</td><td>43.7%</td></tr>
+        <tr><td>General Liability</td><td>47.9%</td></tr>
+        <tr><td>Commercial Property</td><td>52.5%</td></tr>
+        <tr><td>Inland Marine</td><td>54.3%</td></tr>
+        <tr><td>Commercial Auto</td><td>59.2%</td></tr>
+        <tr><td>Professional Liability</td><td>67.9%</td></tr>
+        <tr><td>Umbrella/Excess</td><td>85.7%</td></tr>
+      </table></div>
+
+      <h3>Tier distribution, whole book</h3>
+      <div class="stat-grid">
+        <div class="stat"><div class="k">Preferred</div><div class="v">2.3%</div></div>
+        <div class="stat"><div class="k">Standard</div><div class="v">29.4%</div></div>
+        <div class="stat"><div class="k">High</div><div class="v">19.7%</div></div>
+        <div class="stat"><div class="k">Decline</div><div class="v">48.6%</div></div>
+      </div>
+      <p>Nearly half the book lands in Decline — genuinely, not a bug. Only 12.4% of that is the hard-rule gate; the rest reflects that many real submissions in this book carry a projected loss ratio well above 100% (the unweighted average above), which mechanically drags the 50%-weighted loss component down hard. This is what the real portfolio's economics look like, not an artifact of scoring logic.</p>
+    </section>
+
+    <!-- 17 -->
+    <section class="chapter" id="scorecard">
+      <div class="eyebrow"><span class="num">17</span> assessment</div>
+      <h2>Honest scorecard</h2>
+      <p class="dek">Not every component is equally strong, and this project treated that as something to disclose, not paper over.</p>
+      <div class="tbl-wrap"><table>
+        <tr><th>Component</th><th>Method</th><th>Real-world read</th></tr>
+        <tr><td>Frequency</td><td>Poisson GLM, monotonic, exposure-adjusted</td><td><span class="badge good">Solid</span> — sane deviance, correct direction on every one of 107 monotonicity checks</td></tr>
+        <tr><td>Severity</td><td>Gamma GLM / monotonic GBM</td><td><span class="badge good">Solid</span> — similarly well-behaved, MAE in a defensible range</td></tr>
+        <tr><td>Large-loss probability</td><td>Logistic / GBM on ~1.5% positive rate</td><td><span class="badge bad">Weak</span> — AUC 0.465 (property) / 0.542 (liability), close to or below random. A genuine data-volume ceiling, not a code problem — 123 and 178 positive rows respectively is too thin for any model to learn a reliable pattern from.</td></tr>
+        <tr><td>Bind Propensity</td><td>Closed-form linear, fit to real stored score</td><td><span class="badge good">Solid</span> — R&sup2; 0.9847, provably independent of risk factors, sensible sensitivity to broker/quote factors</td></tr>
+        <tr><td>Appetite/Capacity</td><td>Closed-form + hard-rule gate</td><td><span class="badge good">Solid</span> — hard gate now correctly forces Decline in every case; CAT/TIV penalty verified firing through the real pipeline; one disclosed open item (§10) on the gate's full historical sufficiency</td></tr>
+      </table></div>
+
+      <div class="callout limitation">
+        <span class="label">Why the rebuilt (v2) scores don't closely match the file's original stored scores</span>
+        <p>Loss Propensity v2 correlates with the file's original stored score at only <b>0.177</b>; Appetite v2 at <b>0.558</b>. That's expected, not a red flag: v2 fixes real, verified bugs the reconstruction found along the way — the exposure-unit collapse, the CAT/TIV penalty that never fired, the batch-size self-reference bug, the state/industry saturation — each of which the original stored column has no way of reflecting, since it's a frozen value from whatever formula originally produced it. v2 is checked against real claims outcomes and internal consistency tests (§16), not against how closely it reproduces a static column from a different, undocumented formula.</p>
+      </div>
+    </section>
+
+    <!-- 18 -->
+    <section class="chapter" id="bugs">
+      <div class="eyebrow"><span class="num">18</span> changelog</div>
+      <h2>Every bug found &amp; fixed, in one place</h2>
+      <p class="dek">Pulled together from every section above, in roughly the order they were found.</p>
+      <ol>
+        <li><b>KeyError crash on an unknown LOB</b> in premium calculation &mdash; <code>.get(lob, BOOK_AVG_PREMIUM_RATE)</code> fallback added.</li>
+        <li><b>NaN propagation on unknown-LOB threshold/severity lookups</b> &mdash; group-scoped <code>.fillna()</code> with the group's median.</li>
+        <li><b><code>year_built</code> / <code>building_age_years</code> redundancy</b> (correlation &minus;0.9999999999999999) &mdash; removed from model features.</li>
+        <li><b>Unconstrained fields swinging the loss score up to 76 points</b> &mdash; 5 new monotonic directions added.</li>
+        <li><b>Appetite industry-concentration measured against a single-row batch</b> &mdash; fixed real book-wide constant.</li>
+        <li><b>CAT/TIV penalty dead code</b> (ordinal integer vs. literal string) &mdash; <code>_is_severe()</code> helper, dtype-robust.</li>
+        <li><b>State/industry headroom sharing one scale, saturating 4 of 31 states identically</b> &mdash; two separately-calibrated scales.</li>
+        <li><b>Exposure-unit collapse</b> — frequency barely moving across the real range of headcount/TIV &mdash; explicit per-unit rate + multiplier.</li>
+        <li><b>Region/Channel silently contributing zero</b> to live single-row Bind scores (<code>pd.get_dummies</code> reference-level issue) &mdash; explicit equality-check encoding.</li>
+        <li><b><code>risk_tier_v2</code> not forcing Decline on hard-rule failure</b> &mdash; 982/20,000 real rows mis-tiered before the fix. The single most consequential bug found.</li>
+        <li><b>Leaked backend Python on the results page</b> &mdash; bare ternary expression statements triggering Streamlit's auto-display.</li>
+        <li><b>Literal markdown asterisks on the client-facing narrative</b> &mdash; removed markdown bold syntax entirely.</li>
+        <li><b>Driver attribution masked by score clipping</b> &mdash; compare the raw loss ratio, not the 0–100 clipped display score.</li>
+        <li><b>Bind driver fields defaulting to zero contribution</b> &mdash; populate broker-tier fields before decomposing.</li>
+        <li><b>Training-on-import hazard</b> &mdash; the 3 model-training scripts had no <code>if __name__=="__main__"</code> guard; an ordinary import silently retrained and overwrote the live model file. Reproduced live, then fixed (§20 has the detail — nothing in the shipped app actually imported these files, so live predictions were never at risk, but it was a real hazard for anything written later).</li>
+      </ol>
+    </section>
+
+    <!-- 19 -->
+    <section class="chapter" id="rejected">
+      <div class="eyebrow"><span class="num">19</span> alternatives</div>
+      <h2>Tried and rejected</h2>
+      <p class="dek">What this project considered and deliberately didn't do, and why.</p>
+
+      <h4>GBM as the default over GLM</h4>
+      <p>Not rejected outright — both are trained and raced every time, best-of-deviance/MAE/AUC wins per group per model. GLM wins more often than not on this data (its regularization suits a book this size better than a tree ensemble's flexibility), but nothing is hardcoded to prefer one.</p>
+
+      <h4>SHAP for driver attribution</h4>
+      <p>Considered directly. Loss Propensity is a blend of 3 separately-trained models with no single closed form — SHAP's fast per-model paths don't reach across that combination in one pass, and standing up a model-agnostic SHAP explainer would have been meaningfully more complexity for a result the existing perturbation technique (already used throughout this project's own validation work) already delivers correctly.</p>
+
+      <h4>An LLM call for narrative text</h4>
+      <p>Directly discussed: cost per call at scale, added latency, a new external dependency, and — the deciding factor — non-determinism, which conflicts with the "Technical &amp; audit detail" panel's own explicit claim that every figure is reproducible. The deterministic hash-seeded template approach (§14) was chosen instead.</p>
+
+      <h4>Widening the What-If form's input ranges</h4>
+      <p>Raised, investigated, and reversed on evidence. The hardcoded widget min/max (e.g. wage $46,000–$94,000, employee age 19–66) were checked directly against the real training data's own min/max — and they already match almost exactly. They aren't an arbitrary restriction; they're the honest boundary of what the model has ever seen. Widening them would let a user submit values the model would silently extrapolate on — worse, not better.</p>
+
+      <h4>Flipping <code>debt_to_equity_ratio</code>'s constraint direction</h4>
+      <p>Its dropped, backwards-looking sign was tested directly rather than assumed wrong or right — genuinely significant for Property but with a negligible, likely-confounded effect size (§5), and not significant at all for Liability. Left as dropped.</p>
+
+      <h4>Fabricating "industry-standard" reweighting</h4>
+      <p>Raised explicitly by the project owner and declined on principle: there's no access to proprietary NCCI/ISO rating tables, and replacing one unverifiable judgment call with another that can't be checked against this book's own real data isn't an improvement — it's a different flavor of guessing. Where a real, data-grounded check was possible (debt-to-equity's sign, a scan for any left-out column with genuine statistical signal), it was run and reported honestly either way — including when the honest answer was "current behavior is already correct, nothing to change."</p>
+    </section>
+
+    <!-- 20 -->
+    <section class="chapter" id="hardcoded">
+      <div class="eyebrow"><span class="num">20</span> ledger</div>
+      <h2>Assumptions &amp; hardcoded values, in one place</h2>
+      <div class="tbl-wrap"><table>
+        <tr><th>Value</th><th>Where</th><th>Source</th></tr>
+        <tr><td>Concentration cap: 15%</td><td>appetite_capacity.py</td><td>Confirmed flat across all 10 real industry classes</td></tr>
+        <tr><td>Submission completeness: 91.4%</td><td>appetite_capacity.py</td><td>Real book average — field barely varies (90–92% regardless of segment)</td></tr>
+        <tr><td>Fit thresholds: 50 / 58</td><td>appetite_capacity.py</td><td>Real book's ~25th / ~75th percentile among hard-rule-passing rows</td></tr>
+        <tr><td>Headroom thresholds: 46 / 55</td><td>appetite_capacity.py</td><td>Recalibrated to the real post-fix headroom distribution</td></tr>
+        <tr><td>Industry / state headroom scales: 3.0 / 0.25</td><td>appetite_capacity.py</td><td>Calibrated separately to each measure's own real span</td></tr>
+        <tr><td>CAT/TIV penalty: &minus;8 / &minus;12</td><td>appetite_capacity.py</td><td>Soft approximation — no clean deterministic threshold found in the source data despite testing</td></tr>
+        <tr><td>UW score blend: 30/20/50</td><td>scoring.py</td><td>Appetite / Bind / (100&minus;Loss) — loss weighted highest, matching underwriting priority</td></tr>
+        <tr><td>Tier cutoffs: 72 / 55 / 38</td><td>decision_matrix_reference.py</td><td>Matches the source Excel Dashboard's own documented bands exactly</td></tr>
+        <tr><td>High-tier rate load: +15%</td><td>decision_matrix_reference.py</td><td>Midpoint of the documented +10–20% range</td></tr>
+        <tr><td>Premium rates, 8 lines</td><td>scoring.py</td><td>Real book averages, TIV-based (property) / payroll-based (liability)</td></tr>
+        <tr><td>Exposure floors: 0.03 / 1</td><td>frequency_model.py</td><td>Set safely under the real minimum TIV ($36K) / minimum headcount (1)</td></tr>
+        <tr><td>Time split: 75/25 by date</td><td>all 3 model files</td><td>Forward-generalization test, not a random shuffle</td></tr>
+        <tr><td>Book baselines (TIV $472K, 31 employees, etc.)</td><td>driver_explain.py</td><td>Real medians/modes computed directly from the source book</td></tr>
+        <tr><td>New-broker default tier by segment</td><td>bind_propensity.py</td><td>Most common real tier per segment — an estimate; every segment actually contains all 4 tiers</td></tr>
+      </table></div>
+    </section>
+
+    <!-- 21 -->
+    <section class="chapter" id="walkthrough">
+      <div class="eyebrow"><span class="num">21</span> end to end</div>
+      <h2>A brand-new submission, start to end</h2>
+      <p class="dek">What actually happens between an underwriter clicking Calculate and a number appearing on screen.</p>
+      <ol>
+        <li>Streamlit collects the form into a one-row DataFrame — only the fields relevant to the chosen Line of Business were ever shown.</li>
+        <li><code>score()</code> in <code>scoring.py</code> encodes ordinal tiers, auto-populates the 7 broker-detail fields from Broker Tier, and derives Region from State.</li>
+        <li>The submission's property/liability group is determined, and the frequency, severity, and large-loss models for that group each run a <code>.predict()</code> — three separate model objects, loaded once and cached, not retrained.</li>
+        <li>Frequency's raw output is multiplied by exposure-years and the exposure unit to get an actual predicted claim count; large-loss probability and GPD tail severity combine with attritional severity into one <code>total_expected_loss_cost</code>.</li>
+        <li>Premium is either the real stored value (renewal) or computed fresh from the rate table (new business); loss cost divided by premium gives the loss ratio, clipped to the 0–100 Loss Propensity Score.</li>
+        <li>Bind Propensity and Appetite/Capacity are computed in parallel — pure closed-form arithmetic, no model call.</li>
+        <li>The three scores blend into <code>uw_score_v2</code>; the hard-rule gate is checked independently and can force Decline regardless of that blend.</li>
+        <li><code>driver_explain.py</code> decomposes all three scores — exact for Bind/Appetite, perturbation-based for Loss.</li>
+        <li><code>narrative.py</code> assembles the paragraph deterministically from the finished numbers and drivers — no external call.</li>
+        <li>Streamlit renders the result banner, KPI cards, driver charts, and the audit drill-down — all from the same <code>result</code> Series computed in step 7, nothing recomputed for display.</li>
+      </ol>
+      <p>Every number reproduces exactly on a second run of the identical input — nothing in this pipeline has a random seed exposed to the outcome once training is finished.</p>
+    </section>
+
+  </main>
+
+  <div class="foot">Local pipeline · nothing pushed or deployed · every figure above re-verified against the running code this session</div>
+</div>

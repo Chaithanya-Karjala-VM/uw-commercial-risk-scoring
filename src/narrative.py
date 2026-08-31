@@ -134,13 +134,13 @@ def build_narrative(result, loss_drv, bind_drv, appetite_drv):
     quoted = result.get("quoted_premium_usd")
     if loading is not None and loading == loading and loading > 0:  # not NaN, not zero
         sentences.append(_pick([
-            f"The technical premium of ${technical:,.0f} carries a {loading*100:.0f}% rate load for this tier, quoting at ${quoted:,.0f}.",
-            f"Because of the {tier} tier, the ${technical:,.0f} technical premium is loaded {loading*100:.0f}% to a ${quoted:,.0f} quote.",
+            f"The burning cost of ${technical:,.0f} carries a {loading*100:.0f}% rate load for this tier, quoting at ${quoted:,.0f}.",
+            f"Because of the {tier} tier, the ${technical:,.0f} burning cost is loaded {loading*100:.0f}% to a ${quoted:,.0f} quote.",
         ], "premium", *seed))
     elif quoted != quoted:  # NaN - Decline tier, not quoted
         sentences.append(_pick([
-            f"At a technical premium of ${technical:,.0f}, this isn't quoted at this tier - it needs to be referred first.",
-            f"The ${technical:,.0f} technical premium is informational only here; Decline-tier submissions aren't auto-quoted.",
+            f"At a burning cost of ${technical:,.0f}, this isn't quoted at this tier - it needs to be referred first.",
+            f"The ${technical:,.0f} burning cost is informational only here; Decline-tier submissions aren't auto-quoted.",
         ], "premium_decline", *seed))
 
     # deliberately no closing "recommended action" sentence here - that's already the

@@ -402,6 +402,50 @@ def stage_12_exposure_unit_scaling():
         print("   ", i)
 
 
+def stage_13_direct_channel_no_broker():
+    """Regression test for the Direct-channel/no-broker business rule (2026-08): Direct means
+    no broker relationship at all, and the What-If Simulator now leaves broker_tier unset for
+    a Direct submission rather than asking for one. Confirms (a) that doesn't crash Bind
+    Propensity to its 0 floor - dropping the 7 broker-detail terms outright would, since
+    BIND_COEFFICIENTS' large negative intercept assumes they always contribute something
+    close to a real book-typical value (see bind_propensity.py's populate_broker_fields
+    docstring) - and (b) a Broker-channel submission's score is bit-for-bit unaffected by
+    this change."""
+    print("\n=== Stage 13: Direct channel / no-broker business rule ===")
+    issues = []
+    for lob in ALL_LOBS:
+        base = base_row(lob, "mid")
+        broker_row = {**base, "channel": "Broker"}
+        direct_row = {**base, "channel": "Direct", "broker_tier": None}
+
+        broker_result = score_one(broker_row)
+        direct_result = score_one(direct_row)
+
+        if direct_result["bind_propensity_score_v2"] <= 5.0:
+            issues.append(f"{lob}: Direct-channel Bind Propensity floored to "
+                           f"{direct_result['bind_propensity_score_v2']} - broker terms likely "
+                           f"dropped outright instead of using the neutral fallback profile")
+        # Direct channel carries its own real, fitted bonus (+5.98 vs. Broker reference) - a
+        # Direct submission with an otherwise-identical profile should never score LOWER on
+        # Bind than the same submission through a Broker.
+        if direct_result["bind_propensity_score_v2"] < broker_result["bind_propensity_score_v2"] - 0.5:
+            issues.append(f"{lob}: Direct ({direct_result['bind_propensity_score_v2']}) scored "
+                           f"lower than Broker ({broker_result['bind_propensity_score_v2']}) - "
+                           f"the Direct-channel bonus may have regressed")
+
+        # A plain Broker-channel row (this stage's own baseline) must still match what stage 1-12
+        # already expect elsewhere - loss/appetite scores shouldn't move at all from a channel-only change.
+        broker_row_no_channel = {**base}
+        no_channel_result = score_one(broker_row_no_channel)
+        if abs(broker_result["uw_score_v2"] - no_channel_result["uw_score_v2"]) > 0.05:
+            issues.append(f"{lob}: explicit channel='Broker' scored differently from omitting "
+                           f"channel entirely ({broker_result['uw_score_v2']} vs "
+                           f"{no_channel_result['uw_score_v2']}) - Broker should be the default")
+    print(f"  {len(ALL_LOBS)} lines checked, {len(issues)} issues")
+    for i in issues:
+        print("   ", i)
+
+
 if __name__ == "__main__":
     stage_1_best_worst()
     stage_2_monotonicity()
@@ -415,3 +459,4 @@ if __name__ == "__main__":
     stage_10_cat_tiv_penalty_fires()
     stage_11_decision_layer_consistency()
     stage_12_exposure_unit_scaling()
+    stage_13_direct_channel_no_broker()

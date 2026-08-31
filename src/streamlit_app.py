@@ -78,6 +78,7 @@ st.markdown(f"""
     used everywhere else in the result view. */
     [data-testid="stExpander"] {{
         border: 1px solid {CARD_BORDER}; border-radius: 10px; background: {CARD_BG};
+        margin-bottom: 0.9rem;
     }}
     [data-testid="stExpander"] summary {{
         font-weight: 700 !important; font-size: 1.02rem !important; color: {NAVY} !important;
@@ -533,29 +534,73 @@ with tab_submission:
                 segment = st.session_state.get("sub_broker_segment", "Large National")
                 st.session_state["sub_broker_tier"] = NEW_BROKER_DEFAULT_TIER[segment]
 
+        # A renewal keeps the acquisition relationship it started with - a Direct account
+        # doesn't pick up a broker at renewal, and a broker-serviced account doesn't drop
+        # its broker either. This determines which Channel options are even offered below.
+        business_type = st.radio(
+            "New Business or Renewal?", ["New Business", "Renewal"],
+            key="sub_business_type", horizontal=True
+        )
+        is_renewal = business_type == "Renewal"
+
+        prior_direct = False
+        if is_renewal:
+            prior_relationship = st.radio(
+                "Prior relationship on this account, before this renewal",
+                ["Broker or MGA", "Direct (no broker)"],
+                key="sub_renewal_prior", horizontal=True,
+                help="Renewals inherit the same channel they started with, so this decides "
+                     "whether Channel/Broker below apply at all.",
+            )
+            prior_direct = prior_relationship == "Direct (no broker)"
+
         lob_col, channel_col = st.columns(2)
         lob = lob_col.selectbox("Line of Business", LOB_OPTIONS, key="sub_lob")
-        channel = channel_col.selectbox("Channel", ["Broker", "Direct", "MGA"], key="sub_channel")
 
-        is_existing_broker = st.radio(
-            "Is this an existing broker relationship?", ["No - new broker", "Yes - select broker"],
-            key="sub_is_existing_broker", on_change=_reset_tier_on_toggle, horizontal=True
-        ) == "Yes - select broker"
-
-        if is_existing_broker:
-            broker_id = st.selectbox(
-                "Broker", sorted(KNOWN_BROKER_TIER.keys()), key="sub_broker_id",
-                on_change=_reset_tier_to_known_broker,
-                help="Broker Tier below auto-fills with this broker's real, on-file tier.")
-            st.session_state.setdefault("sub_broker_tier", tier_for_known_broker(broker_id))
-            broker_segment = None
+        if prior_direct:
+            channel = "Direct"
+            channel_col.selectbox("Channel", ["Direct"], key="sub_channel_locked", disabled=True,
+                                   help="Locked to Direct - this account had no broker relationship "
+                                        "before this renewal.")
         else:
-            broker_segment = st.selectbox(
-                "Broker Capacity Segment", ["Large National", "Regional", "Small Independent"],
-                key="sub_broker_segment", on_change=_reset_tier_to_segment_default,
-                help="Broker Tier below defaults to the typical tier for this segment, and "
-                     "can be changed if the actual tier is known.")
-            st.session_state.setdefault("sub_broker_tier", NEW_BROKER_DEFAULT_TIER[broker_segment])
+            # Renewal + broker-serviced already rules out Direct (that's the other radio
+            # branch above) - New Business still offers all 3.
+            channel_options = ["Broker", "MGA"] if is_renewal else ["Broker", "Direct", "MGA"]
+            if st.session_state.get("sub_channel") not in channel_options:
+                st.session_state["sub_channel"] = channel_options[0]
+            channel = channel_col.selectbox("Channel", channel_options, key="sub_channel")
+
+        # Direct means no broker relationship at all, full stop - the fields below don't
+        # apply and don't show. Under the hood, scoring still needs *some* value for the 7
+        # broker-detail fields the Bind formula runs on (dropping them outright would crash
+        # the score to its floor, not "zero" it - see project notes) - broker_tier is left
+        # unset here, and populate_broker_fields()'s own existing fallback-to-Silver-average
+        # behavior (already there for an unrecognized tier) supplies a neutral, real,
+        # book-typical profile instead of a degenerate one.
+        show_broker_fields = channel != "Direct"
+
+        if show_broker_fields:
+            is_existing_broker = st.radio(
+                "Is this an existing broker relationship?", ["No - new broker", "Yes - select broker"],
+                key="sub_is_existing_broker", on_change=_reset_tier_on_toggle, horizontal=True
+            ) == "Yes - select broker"
+
+            if is_existing_broker:
+                broker_id = st.selectbox(
+                    "Broker", sorted(KNOWN_BROKER_TIER.keys()), key="sub_broker_id",
+                    on_change=_reset_tier_to_known_broker,
+                    help="Broker Tier below auto-fills with this broker's real, on-file tier.")
+                st.session_state.setdefault("sub_broker_tier", tier_for_known_broker(broker_id))
+                broker_segment = None
+            else:
+                broker_segment = st.selectbox(
+                    "Broker Capacity Segment", ["Large National", "Regional", "Small Independent"],
+                    key="sub_broker_segment", on_change=_reset_tier_to_segment_default,
+                    help="Broker Tier below defaults to the typical tier for this segment, and "
+                         "can be changed if the actual tier is known.")
+                st.session_state.setdefault("sub_broker_tier", NEW_BROKER_DEFAULT_TIER[broker_segment])
+        else:
+            st.caption("Direct channel - no broker relationship applies to this submission.")
 
         group = group_for_lob(lob)
         is_property = group == "property"
@@ -652,10 +697,14 @@ with tab_submission:
 
             with col4:
                 st.markdown("**Broker**")
-                tier_options = ["Platinum", "Gold", "Silver", "Bronze"]
-                broker_tier = st.selectbox(
-                    "Broker Tier", tier_options, key="sub_broker_tier",
-                    help="Auto-filled above; change here if the actual tier differs from the default.")
+                if show_broker_fields:
+                    tier_options = ["Platinum", "Gold", "Silver", "Bronze"]
+                    broker_tier = st.selectbox(
+                        "Broker Tier", tier_options, key="sub_broker_tier",
+                        help="Auto-filled above; change here if the actual tier differs from the default.")
+                else:
+                    broker_tier = None
+                    st.caption("No broker relationship (Direct channel) - not applicable.")
                 competing_quotes_count = st.number_input("Competing Quotes Count", 0, 10, 2)
                 risk_state = st.selectbox("State", sorted(STATE_TO_REGION.keys()), index=sorted(STATE_TO_REGION.keys()).index("CA"))
                 coverage_limit_requested_usd = st.number_input("Coverage Limit Requested ($)", 50000, 50000000, 500000, step=10000)
@@ -718,7 +767,8 @@ with tab_submission:
                 "safety_inspection_findings": safety_inspection_findings,
                 "business_tenure_years": business_tenure_years, "revenue_growth_trend_pct": revenue_growth_trend_pct,
                 "debt_to_equity_ratio": debt_to_equity_ratio, "policy_term_months": policy_term_months,
-                "broker_tier": broker_tier, "channel": channel, "competing_quotes_count": competing_quotes_count,
+                "broker_tier": broker_tier, "channel": channel, "renewal_flag": business_type,
+                "competing_quotes_count": competing_quotes_count,
                 "risk_state": risk_state, "coverage_limit_requested_usd": coverage_limit_requested_usd,
                 "sanctions_ofac_watchlist_flag": int(sanctions_flag),
                 "prior_insolvency_bankruptcy_flag": int(insolvency_flag),
@@ -748,12 +798,6 @@ with tab_submission:
             appetite_drv = dexp.appetite_drivers(row_dict)
 
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-
-            def _section_label(text):
-                st.markdown(
-                    f'<div style="color:{NAVY}; font-size:0.92rem; font-weight:800; '
-                    f'letter-spacing:0.04em; margin-bottom:10px;">{text}</div>', unsafe_allow_html=True
-                )
 
             def _sub_label(text):
                 st.markdown(
@@ -791,40 +835,42 @@ with tab_submission:
             </div>
             """, unsafe_allow_html=True)
 
-            # ---- Key Factors chips ----
-            chip_source = loss_drv[:2] + bind_drv[:2] + appetite_drv[:2]
-            seen, chips = set(), []
-            for d in chip_source:
-                if d["label"] not in seen:
-                    chips.append(d["label"]); seen.add(d["label"])
-            if chips:
-                chip_bg = _rgba(ACCENT, 0.14 if IS_DARK else 0.10)
-                chip_border = _rgba(ACCENT, 0.45)
-                chip_html = "".join(
-                    f'<span style="background:{chip_bg}; border:1px solid {chip_border}; border-radius:20px; '
-                    f'padding:6px 16px; margin:3px 6px 3px 0; display:inline-block; font-size:0.85rem; '
-                    f'font-weight:600; color:{TEXT_MAIN};">{c}</span>' for c in chips
-                )
-                with st.container(border=True):
-                    _section_label("KEY FACTORS BEHIND THIS DECISION")
-                    st.markdown(f'<div style="margin:-2px 0 0 0;">{chip_html}</div>', unsafe_allow_html=True)
-                st.markdown('<div style="height:1rem;"></div>', unsafe_allow_html=True)
-
-            # ---- KPI cards ----
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Composite UW Score", f"{result['uw_score_v2']:.1f}/100")
-            k2.metric("Loss Propensity Score", f"{result['loss_propensity_score_v2']:.1f}")
-            k3.metric("Bind Propensity Score", f"{result['bind_propensity_score_v2']:.1f}")
-            k4.metric("Appetite Score", f"{result['appetite_capacity_score_v2']:.1f}")
-
-            p1, p2, p3 = st.columns(3)
-            p1.metric("Technical Premium", f"${result['indicated_annual_premium_usd']:,.0f}")
+            # ---- Key Factors, Score Breakdown, and Why This Score all collapse behind the
+            # same closed-drop-down treatment as Technical & audit detail below - only the
+            # Underwriting Result banner and Narrative above stay open by default. The bold,
+            # accent-colored expander-header CSS already defined for Technical & audit detail
+            # applies automatically to every st.expander() on the page, so these pick up the
+            # same heading treatment for free just by using one.
             quoted = result["quoted_premium_usd"]
-            p2.metric("Quoted Premium", f"${quoted:,.0f}" if quoted == quoted else "Not Quoted")
-            p3.metric("Probability of Large Loss", f"{result['p_large_loss']*100:.1f}%")
 
-            # ---- Why This Score - live driver bar charts, one consistent card ----
-            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+            with st.expander("Key Factors Behind This Decision"):
+                chip_source = loss_drv[:2] + bind_drv[:2] + appetite_drv[:2]
+                seen, chips = set(), []
+                for d in chip_source:
+                    if d["label"] not in seen:
+                        chips.append(d["label"]); seen.add(d["label"])
+                if chips:
+                    chip_bg = _rgba(ACCENT, 0.14 if IS_DARK else 0.10)
+                    chip_border = _rgba(ACCENT, 0.45)
+                    chip_html = "".join(
+                        f'<span style="background:{chip_bg}; border:1px solid {chip_border}; border-radius:20px; '
+                        f'padding:6px 16px; margin:3px 6px 3px 0; display:inline-block; font-size:0.85rem; '
+                        f'font-weight:600; color:{TEXT_MAIN};">{c}</span>' for c in chips
+                    )
+                    st.markdown(chip_html, unsafe_allow_html=True)
+                else:
+                    st.info("No single field dominates this read - a balanced profile overall.")
+
+            with st.expander("Score Breakdown & Premium"):
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Composite UW Score", f"{result['uw_score_v2']:.1f}/100")
+                k2.metric("Loss Propensity Score", f"{result['loss_propensity_score_v2']:.1f}")
+                k3.metric("Bind Propensity Score", f"{result['bind_propensity_score_v2']:.1f}")
+                k4.metric("Appetite Score", f"{result['appetite_capacity_score_v2']:.1f}")
+
+                p1, p2 = st.columns(2)
+                p1.metric("Burning Cost", f"${result['indicated_annual_premium_usd']:,.0f}")
+                p2.metric("Probability of Large Loss", f"{result['p_large_loss']*100:.1f}%")
 
             def _driver_bar(drivers, good_direction):
                 if not drivers:
@@ -841,14 +887,7 @@ with tab_submission:
                 )
                 return fig
 
-            # st.container(border=True) - the correct, native way to wrap real Streamlit
-            # widgets (columns, Plotly charts) in one visually consistent card. An earlier
-            # version of this tried to open an HTML <div> in one st.markdown() call and close
-            # it in a later one, spanning the widgets in between - that doesn't actually nest
-            # in the page's DOM, since each st.markdown()/element call renders as its own
-            # isolated fragment, not one continuous HTML document.
-            with st.container(border=True):
-                _section_label("WHY THIS SCORE")
+            with st.expander("Why This Score"):
                 st.caption("Top factors behind each score, measured against the real book's own typical "
                            "submission. Red bars push the outcome the wrong way; green bars help it.")
                 d1, d2, d3 = st.columns(3)
@@ -891,7 +930,7 @@ with tab_submission:
                         ("Probability of Large Loss", round(result["p_large_loss"], 4)),
                         ("Expected Large-Loss Severity ($)", round(result["expected_large_severity"], 0)),
                         ("Total Expected Loss Cost ($)", round(result["total_expected_loss_cost"], 0)),
-                        ("Technical Premium ($)", round(result["indicated_annual_premium_usd"], 0)),
+                        ("Burning Cost ($)", round(result["indicated_annual_premium_usd"], 0)),
                         ("Premium Loading", f"{loading_pct*100:.0f}%" if loading_pct == loading_pct else "N/A - not quoted"),
                         ("Quoted Premium ($)", round(quoted, 0) if quoted == quoted else "Not Quoted"),
                         ("Predicted Loss Ratio (%)", round(result["predicted_loss_ratio_pct"], 1)),

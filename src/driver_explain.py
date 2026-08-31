@@ -151,9 +151,16 @@ def bind_drivers(row_dict, top_n=5):
                       "broker_profitability_score_0_100", "quote_to_bind_days",
                       "submission_completeness_pct"]
     broker_total = sum(BIND_COEFFICIENTS[f] * (row_dict.get(f, b[f]) - b[f]) for f in broker_fields)
-    tier = row_dict.get("broker_tier", "Silver")
 
-    results = [(f"Broker Tier: {tier}", broker_total)]
+    results = []
+    if row_dict.get("channel") == "Direct":
+        # No broker relationship on a Direct submission - nothing real to attribute to a
+        # "Broker Tier" driver here (the neutral profile behind the scenes is a scoring
+        # mechanic, not something the underwriter chose - see bind_propensity.py).
+        pass
+    else:
+        tier = row_dict.get("broker_tier", "Silver")
+        results.append((f"Broker Tier: {tier}", broker_total))
 
     cqc = row_dict.get("competing_quotes_count", b["competing_quotes_count"])
     results.append(("Competing Quotes Count", BIND_COEFFICIENTS["competing_quotes_count"] * (cqc - b["competing_quotes_count"])))
@@ -185,9 +192,10 @@ def appetite_drivers(row_dict, top_n=5):
     fsc = row_dict.get("financial_stability_score", b["financial_stability_score"])
     results = [("Financial Stability Score", FIT_WEIGHT * c["financial_stability_score"] * (fsc - b["financial_stability_score"]))]
 
-    tier_num = BROKER_TIER_MAP.get(row_dict.get("broker_tier"), 2)
-    results.append((f"Broker Tier: {row_dict.get('broker_tier', 'Silver')}",
-                     FIT_WEIGHT * c["broker_tier_num"] * (tier_num - b["broker_tier_num"])))
+    if row_dict.get("channel") != "Direct":
+        tier_num = BROKER_TIER_MAP.get(row_dict.get("broker_tier"), 2)
+        results.append((f"Broker Tier: {row_dict.get('broker_tier', 'Silver')}",
+                         FIT_WEIGHT * c["broker_tier_num"] * (tier_num - b["broker_tier_num"])))
 
     if row_dict.get("target_growth_segment_flag"):
         results.append(("Target Growth Segment", FIT_WEIGHT * c["target_growth_segment_flag"]))

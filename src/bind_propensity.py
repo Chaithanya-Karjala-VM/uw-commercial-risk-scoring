@@ -90,7 +90,22 @@ NEW_BROKER_DEFAULT_TIER = {
 def populate_broker_fields(df, broker_tier_col="broker_tier"):
     """Fills in the 6 no-longer-collected broker-detail fields plus submission_completeness_pct
     from real per-tier averages. competing_quotes_count stays a live, user-entered field -
-    it's deal-specific, not a property of the broker relationship."""
+    it's deal-specific, not a property of the broker relationship.
+
+    Also doubles, deliberately, as the "no broker" pathway for a Direct-channel submission
+    (added 2026-08, per business rule: Direct means no broker relationship, full stop - the
+    What-If Simulator hides Broker Tier entirely for Direct and leaves broker_tier unset).
+    A genuinely missing/unset broker_tier falls through .map()'s unmatched-key case straight
+    to the Silver-tier average below - which happens to sit close to the whole book's real
+    average across every field (confirmed: e.g. hit/bind ratio 38.11 vs. book-wide 38.06),
+    so a Direct submission gets a sane, real, book-typical profile rather than a value with
+    no meaning. The alternative - dropping the 7 broker terms from the score entirely for
+    Direct rows - was considered and rejected: BIND_COEFFICIENTS' large negative intercept
+    (-254.0) is calibrated assuming those 7 terms always contribute something close to this
+    same real average (true for every row in the source book, Direct-channel rows included -
+    see project notes), so simply omitting them would crash Bind Propensity to its 0 floor
+    for every Direct submission, not "zero" the broker effect the way the business rule
+    actually intends."""
     df = df.copy()
     for field in BIND_INGREDIENTS:
         if field == "competing_quotes_count":
