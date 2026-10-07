@@ -9,7 +9,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-import streamlit.components.v1 as components
 from data_loader import load_data
 from scoring import load_models, score
 from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, group_for_lob, STATE_TO_REGION, CURRENT_YEAR, PRIMARY_CAT_PERIL_OPTIONS, region_for_state
@@ -957,13 +956,30 @@ with tab_submission:
 
 with tab_feature_map:
     st.header("Feature Map")
+    st.caption("Which real input fields feed each of the three scores - grouped by category, "
+               "with a one-line reason for each.")
 
     fm_lob = st.selectbox("Line of Business", fmap.LOB_OPTIONS, index=0, key="fm_lob_filter",
                            help="Bind and Appetite never change by line - only Loss Propensity's "
-                                "circle narrows to that line's real feature set.")
-    fm_zones = fmap.compute_zones(fmap.loss_features_for(fm_lob))
+                                "own column narrows to that line's real feature set.")
+    fm_rows = fmap.build_reference_rows(fmap.loss_features_for(fm_lob))
 
-    # Fixed design width (see COMPONENT_HEIGHT's own comment in feature_map.py) makes the
-    # rendered height fully predictable, so this can be set to match exactly - no scrollbar,
-    # nothing clipped.
-    components.html(fmap.build_venn_component(IS_DARK, zones=fm_zones), height=fmap.COMPONENT_HEIGHT, scrolling=False)
+    fm_loss_n = sum(r["Loss Propensity"] for r in fm_rows)
+    fm_bind_n = sum(r["Bind Propensity"] for r in fm_rows)
+    fm_app_n = sum(r["Appetite / Capacity"] for r in fm_rows)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Loss Propensity", f"{fm_loss_n} fields")
+    m2.metric("Bind Propensity", f"{fm_bind_n} fields")
+    m3.metric("Appetite / Capacity", f"{fm_app_n} fields")
+
+    st.dataframe(
+        pd.DataFrame(fm_rows), width="stretch", hide_index=True, height=1250,
+        column_config={
+            "Category": st.column_config.TextColumn("Category", width="small"),
+            "Field": st.column_config.TextColumn("Field", width="medium"),
+            "Loss Propensity": st.column_config.CheckboxColumn("Loss Propensity"),
+            "Bind Propensity": st.column_config.CheckboxColumn("Bind Propensity"),
+            "Appetite / Capacity": st.column_config.CheckboxColumn("Appetite / Capacity"),
+            "Why": st.column_config.TextColumn("Why", width="large"),
+        },
+    )

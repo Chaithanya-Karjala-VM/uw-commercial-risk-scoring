@@ -194,6 +194,75 @@ def zone_counts():
     return {z: len(fields) for z, fields in ZONES.items()}
 
 
+# Groups every one of the 49 fields into one of 6 plain categories, purely for presentation -
+# doesn't affect which score actually uses a field, just how the reference table below is
+# organized so related fields sit together instead of a flat alphabetical list.
+FIELD_CATEGORY = {
+    # Claims & financial history
+    "claim_count_last_3_years": "Claims & Financial History", "large_loss_count_last_5_years": "Claims & Financial History",
+    "claims_free_years": "Claims & Financial History", "financial_stability_score": "Claims & Financial History",
+    "business_tenure_years": "Claims & Financial History", "revenue_growth_trend_pct": "Claims & Financial History",
+    "debt_to_equity_ratio": "Claims & Financial History", "safety_program_flag": "Claims & Financial History",
+    "safety_inspection_findings": "Claims & Financial History",
+    # Property & building
+    "building_age_years": "Property & Building", "built_to_current_code_flag": "Property & Building",
+    "construction_type": "Property & Building", "num_stories": "Property & Building",
+    "square_footage": "Property & Building", "roof_age_years": "Property & Building",
+    "roof_type": "Property & Building", "sprinklered_flag": "Property & Building",
+    "fire_protection_class_iso_ppc": "Property & Building", "distance_to_fire_station_miles": "Property & Building",
+    "distance_to_fire_hydrant_miles": "Property & Building", "fire_alarm_monitoring_type": "Property & Building",
+    "occupancy_type": "Property & Building",
+    # Catastrophe & location
+    "fema_flood_zone_code": "Catastrophe & Location", "flood_zone_tier": "Catastrophe & Location",
+    "earthquake_zone_tier": "Catastrophe & Location", "wildfire_zone_tier": "Catastrophe & Location",
+    "wind_zone_tier": "Catastrophe & Location", "soil_liquefaction_class": "Catastrophe & Location",
+    "primary_cat_peril_exposure": "Catastrophe & Location", "distance_to_coast_miles": "Catastrophe & Location",
+    "distance_to_fault_line_miles": "Catastrophe & Location", "distance_to_nearest_water_body_miles": "Catastrophe & Location",
+    "total_insured_value_usd": "Catastrophe & Location", "risk_state": "Catastrophe & Location",
+    # Workforce
+    "industry_class_naics": "Workforce", "number_of_employees": "Workforce",
+    "avg_wage_per_employee_usd": "Workforce", "avg_employee_age": "Workforce", "avg_weekly_work_hours": "Workforce",
+    # Broker & deal
+    "broker_tier": "Broker & Deal", "competing_quotes_count": "Broker & Deal",
+    "coverage_limit_requested_usd": "Broker & Deal", "channel": "Broker & Deal",
+    # Compliance & strategy
+    "sanctions_ofac_watchlist_flag": "Compliance & Strategy", "prior_insolvency_bankruptcy_flag": "Compliance & Strategy",
+    "restricted_operations_flag": "Compliance & Strategy", "region_lob_restricted_flag": "Compliance & Strategy",
+    "submission_completeness_pct": "Compliance & Strategy", "target_growth_segment_flag": "Compliance & Strategy",
+}
+_CATEGORY_ORDER = ["Claims & Financial History", "Property & Building", "Catastrophe & Location",
+                    "Workforce", "Broker & Deal", "Compliance & Strategy"]
+
+
+def build_reference_rows(loss_features):
+    """One row per field (plain dicts, no pandas dependency here) for a table-style view -
+    which score(s) use it, grouped by category, with the one-line reason attached. Driven by
+    the same compute_zones() set logic as the chart, so a row's 3 checkmarks can never drift
+    out of sync with what the diagram itself would show for the same filter selection."""
+    zones = compute_zones(loss_features)
+    membership = {}
+    for zid, fields in zones.items():
+        for f in fields:
+            in_loss = zid in ("loss", "loss_bind", "loss_appetite", "all3")
+            in_bind = zid in ("bind", "loss_bind", "bind_appetite", "all3")
+            in_appetite = zid in ("appetite", "loss_appetite", "bind_appetite", "all3")
+            membership[f] = (in_loss, in_bind, in_appetite)
+
+    rows = []
+    for field_id, (in_loss, in_bind, in_appetite) in membership.items():
+        label, note = field_display(field_id)
+        rows.append({
+            "Category": FIELD_CATEGORY.get(field_id, "Other"),
+            "Field": label,
+            "Loss Propensity": in_loss,
+            "Bind Propensity": in_bind,
+            "Appetite / Capacity": in_appetite,
+            "Why": note,
+        })
+    rows.sort(key=lambda r: (_CATEGORY_ORDER.index(r["Category"]) if r["Category"] in _CATEGORY_ORDER else 99, r["Field"]))
+    return rows
+
+
 # Real 3-circle geometry, sized roughly to each score's field count (Loss has by far the
 # most fields and needs by far the most room) and positioned so every pairwise overlap AND
 # the triple-overlap center are real, non-empty regions - verified algebraically (each
