@@ -38,6 +38,22 @@ import pandas as pd
 CONCENTRATION_CAP_PCT = 0.15  # flat cap, confirmed identical across every industry class
 BOOK_AVG_COMPLETENESS = 91.4  # submission_completeness_pct barely varies across the real book
 
+# Every real dataframe field this module's live scoring path actually reads (hard_rule_pass,
+# cat_tiv_penalty, compute_appetite_fit, compute_capacity_headroom) - NOT the __main__
+# self-verification block's appetite_hard_rule_pass_flag, which only exists on the historical
+# book and is never read by a live submission. Single source of truth for anything (the
+# Feature Map tab, future audits) that needs to know "what does Appetite actually use" without
+# re-deriving it by hand from the function bodies - added 2026-10 specifically so that tab's
+# data can never silently drift from the real scoring code.
+APPETITE_FEATURES = [
+    "sanctions_ofac_watchlist_flag", "prior_insolvency_bankruptcy_flag",
+    "restricted_operations_flag", "region_lob_restricted_flag",
+    "flood_zone_tier", "earthquake_zone_tier", "wildfire_zone_tier", "total_insured_value_usd",
+    "broker_tier", "submission_completeness_pct", "coverage_limit_requested_usd",
+    "target_growth_segment_flag", "financial_stability_score",
+    "industry_class_naics", "risk_state",
+]
+
 BROKER_TIER_MAP = {"Platinum": 4, "Gold": 3, "Silver": 2, "Bronze": 1}
 
 # real per-state average reinsurance binding headroom - negative means that state is already

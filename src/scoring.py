@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 import joblib
-from lob_config import group_for_lob, encode_ordinal_tiers, region_for_state
+from lob_config import group_for_lob, encode_ordinal_tiers, region_for_state, CURRENT_YEAR
 from bind_propensity import compute_bind_propensity, populate_broker_fields, BIND_COEFFICIENTS
 from appetite_capacity import compute_appetite_capacity_score, compute_appetite_decision, hard_rule_pass
 from decision_matrix_reference import tier_for_score, RISK_TIER_INFO, RISK_TIER_PREMIUM_LOADING
@@ -138,6 +138,20 @@ def score(df, models, term_col="policy_term_months"):
     # model needs it, using the confirmed 1:1 mapping in lob_config.py
     if "risk_location_region" not in out.columns or out["risk_location_region"].isna().any():
         out["risk_location_region"] = out.get("risk_state", pd.Series(index=out.index)).apply(region_for_state)
+
+    # The Streamlit form always derives building_age_years = CURRENT_YEAR - year_built itself
+    # before calling score(), so this has never fired for a live submission - found instead
+    # while random-testing score() directly with a hand-built row that (like any other future
+    # caller - a batch script, an API, a test harness) supplied year_built without separately
+    # deriving building_age_years, and got a raw KeyError instead of a usable result. Same
+    # defensive-derivation pattern as risk_location_region above, so score() itself is crash-safe
+    # for any caller, not just the one path that currently happens to always do this correctly.
+    if "year_built" in out.columns and ("building_age_years" not in out.columns or out["building_age_years"].isna().any()):
+        derived_age = CURRENT_YEAR - out["year_built"]
+        if "building_age_years" in out.columns:
+            out["building_age_years"] = out["building_age_years"].fillna(derived_age)
+        else:
+            out["building_age_years"] = derived_age
 
     out["_group"] = out["line_of_business"].apply(group_for_lob)
 

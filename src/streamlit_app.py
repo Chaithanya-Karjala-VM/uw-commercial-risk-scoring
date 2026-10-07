@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 from data_loader import load_data
 from scoring import load_models, score
 from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, group_for_lob, STATE_TO_REGION, CURRENT_YEAR, PRIMARY_CAT_PERIL_OPTIONS, region_for_state
@@ -16,6 +17,7 @@ from bind_propensity import NEW_BROKER_DEFAULT_TIER, KNOWN_BROKER_TIER, tier_for
 from decision_matrix_reference import RISK_TIER_ORDER, RISK_TIER_INFO
 import driver_explain as dexp
 from narrative import build_narrative, build_banner_summary
+import feature_map as fmap
 
 st.set_page_config(page_title="Assisted Underwriting", layout="wide")
 
@@ -154,8 +156,8 @@ with title_col:
     st.markdown(f"<h1 style='margin-bottom:0;'>Assisted Underwriting</h1>", unsafe_allow_html=True)
     st.caption("Model-driven Loss Propensity scoring for commercial submissions")
 
-tab_submission, tab_portfolio, tab_dashboard = st.tabs(
-    ["What-If Simulator", "Portfolio Overview", "Executive Dashboard"]
+tab_submission, tab_portfolio, tab_dashboard, tab_feature_map = st.tabs(
+    ["What-If Simulator", "Portfolio Overview", "Executive Dashboard", "Feature Map"]
 )
 
 # ============================================================================
@@ -950,3 +952,18 @@ with tab_submission:
                         )
                     else:
                         st.info("No material drivers to rank for this submission.")
+
+# ============================================================================
+
+with tab_feature_map:
+    st.header("Feature Map")
+
+    fm_lob = st.selectbox("Line of Business", fmap.LOB_OPTIONS, index=0, key="fm_lob_filter",
+                           help="Bind and Appetite never change by line - only Loss Propensity's "
+                                "circle narrows to that line's real feature set.")
+    fm_zones = fmap.compute_zones(fmap.loss_features_for(fm_lob))
+
+    # Fixed design width (see COMPONENT_HEIGHT's own comment in feature_map.py) makes the
+    # rendered height fully predictable, so this can be set to match exactly - no scrollbar,
+    # nothing clipped.
+    components.html(fmap.build_venn_component(IS_DARK, zones=fm_zones), height=fmap.COMPONENT_HEIGHT, scrolling=False)

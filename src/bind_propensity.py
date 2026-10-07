@@ -38,6 +38,18 @@ NEW_BIND_INGREDIENTS = BIND_INGREDIENTS + ["total_insured_value_usd", "coverage_
     + [f"region_{r}" for r in REGION_OPTIONS[1:]] \
     + [f"channel_{c}" for c in CHANNEL_OPTIONS[1:]]  # first level of each is the reference
 
+# Source-level fields an underwriter actually provides, collapsing the 7 auto-populated
+# broker-detail fields (BIND_INGREDIENTS minus competing_quotes_count) down to the one real
+# input that drives them - broker_tier - and the one-hot region/channel dummies down to their
+# single real source columns (risk_state, channel). This is "what feeds Bind Propensity" at
+# the level a form field or a feature-overlap diagram should reason about, not the internal
+# design-matrix columns in NEW_BIND_INGREDIENTS. Added 2026-10 for the Feature Map tab - see
+# appetite_capacity.py's APPETITE_FEATURES for the same reasoning on the Appetite side.
+BIND_SOURCE_FIELDS = [
+    "broker_tier", "competing_quotes_count", "total_insured_value_usd",
+    "coverage_limit_requested_usd", "risk_state", "channel",
+]
+
 # real broker ID -> real tier, confirmed a clean 1:1 mapping (every one of the 60 brokers
 # carries exactly one tier across every submission they appear on, zero exceptions)
 KNOWN_BROKER_TIER = {

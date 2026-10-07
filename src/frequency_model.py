@@ -136,7 +136,7 @@ if __name__ == "__main__":
         # real-world direction is a red flag, not real signal - found exactly this with
         # debt_to_equity_ratio (fit negative, i.e. "more debt -> fewer claims", backwards) which
         # was causing a small but real non-monotonic wobble in the combined score. Drop and refit
-        # rather than keep a spurious driver.
+        # rath er than keep a spurious driver.
         ohe_check = glm.named_steps["prep"].named_transformers_["cat"].named_steps["onehot"]
         feat_names_check = num_cols + list(ohe_check.get_feature_names_out(cat_cols))
         coefs_check = pd.Series(glm.named_steps["model"].coef_.ravel(), index=feat_names_check)
