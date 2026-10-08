@@ -386,14 +386,17 @@ def build_venn_component(is_dark, zones=None):
 
 
 if __name__ == "__main__":
+    _all = set(LOSS_FEATURES) | set(BIND_FEATURES) | set(APPETITE_FEATURES_SET)
     print(f"Loss Propensity : {len(LOSS_FEATURES)} fields")
     print(f"Bind Propensity : {len(BIND_FEATURES)} fields")
     print(f"Appetite        : {len(APPETITE_FEATURES_SET)} fields")
-    print(f"Total unique    : {len(_LOSS | _BIND | _APP)} fields")
+    print(f"Total unique    : {len(_all)} fields")
     print()
     for z, fields in ZONES.items():
         print(f"{ZONE_LABELS[z]:42s} ({len(fields)}): {fields}")
-    missing_labels = [f for f in (_LOSS | _BIND | _APP) if f not in FIELD_LABELS]
-    missing_notes = [f for f in (_LOSS | _BIND | _APP) if f not in FIELD_NOTES]
-    print(f"\nFields missing a label: {missing_labels}")
-    print(f"Fields missing a note : {missing_notes}")
+    missing_labels = [f for f in _all if f not in FIELD_LABELS]
+    missing_notes = [f for f in _all if f not in FIELD_NOTES]
+    missing_categories = [f for f in _all if f not in FIELD_CATEGORY]
+    print(f"\nFields missing a label   : {missing_labels}")
+    print(f"Fields missing a note    : {missing_notes}")
+    print(f"Fields missing a category: {missing_categories}")

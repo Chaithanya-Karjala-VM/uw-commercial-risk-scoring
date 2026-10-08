@@ -6,7 +6,8 @@ Run: python test_model_behavior.py
 import itertools
 import pandas as pd
 from scoring import load_models, score
-from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, CURRENT_YEAR
+from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, CURRENT_YEAR, region_for_state
+import driver_explain as dexp
 
 models = load_models()
 ALL_LOBS = PROPERTY_LOBS + LIABILITY_LOBS
@@ -446,6 +447,86 @@ def stage_13_direct_channel_no_broker():
         print("   ", i)
 
 
+def stage_14b_loss_bind_driver_direction():
+    """Same audit as stage_14, extended to Loss and Bind after a client-reported bug in
+    Appetite's driver direction (2026-10) prompted checking the other two panels too - they
+    turned out correct, but had no permanent regression guard either. Scoped to a handful of
+    fields with an unambiguous, model-independent expected direction (claims history,
+    financial stability, roof age, broker tier) - deliberately excludes fields base_row()
+    holds constant across levels (number_of_employees, avg_wage_per_employee_usd,
+    industry_class_naics - these showed up as false alarms in the investigation behind this
+    stage, same root cause as stage_14's Industry Concentration exclusion) and
+    construction_type (verified against the real book: Fire Resistive has the lowest claim
+    frequency but NOT the lowest severity of any class - a genuine, data-driven nuance from
+    deliberately leaving this categorical field unconstrained, not a bug to encode here as if
+    there were one unambiguous right answer)."""
+    print("\n=== Stage 14b: Loss + Bind driver direction sanity (favorable direction) ===")
+    issues = []
+    checked = 0
+    loss_expect_favorable_field = {"Claims-Free Years", "Claim Count (3yr)", "Financial Stability Score",
+                                    "Roof Age", "Business Tenure", "Large-Loss Count (5yr)"}
+    for lob in ALL_LOBS:
+        for level, want_favorable in [("best", True), ("worst", False)]:
+            row_dict = base_row(lob, level)
+            row_dict["risk_location_region"] = region_for_state(row_dict["risk_state"])
+            row_df = pd.DataFrame([row_dict])
+
+            loss_drv = dexp.loss_drivers(row_df, lambda d: score(d, models).iloc[0])
+            for d in loss_drv:
+                if d["label"] not in loss_expect_favorable_field:
+                    continue
+                checked += 1
+                is_favorable = d["direction"] == "decreases"
+                if is_favorable != want_favorable:
+                    issues.append(f"{lob}/{level} LOSS: {d['label']} dir={d['direction']} "
+                                   f"(expected {'favorable' if want_favorable else 'unfavorable'})")
+
+            bind_drv = dexp.bind_drivers(row_dict)
+            for d in bind_drv:
+                if not d["label"].startswith("Broker Tier"):
+                    continue
+                checked += 1
+                is_favorable = d["direction"] == "increases"
+                if is_favorable != want_favorable:
+                    issues.append(f"{lob}/{level} BIND: {d['label']} dir={d['direction']} "
+                                   f"(expected {'favorable' if want_favorable else 'unfavorable'})")
+    print(f"  {checked} driver entries checked, {len(issues)} issues")
+    for i in issues:
+        print("   ", i)
+
+
+def stage_14_appetite_driver_direction():
+    """Regression test for a real bug (2026-10, caught via a client screenshot): appetite_drivers()
+    used to flip the sign of every single driver it returned, so a genuinely favorable field
+    (e.g. Financial Stability Score well above the book average) rendered as a red/unfavorable
+    bar in the UI, and a genuinely unfavorable field would have rendered green - every driver
+    in the panel was backwards, not just one. Confirms a "best" scenario's drivers now report
+    the favorable direction and a "worst" scenario's report the unfavorable one."""
+    print("\n=== Stage 14: Appetite driver direction sanity (favorable = 'increases') ===")
+    issues = []
+    for lob in ALL_LOBS:
+        for level, want_favorable in [("best", True), ("worst", False)]:
+            row = base_row(lob, level)
+            row["risk_location_region"] = region_for_state(row["risk_state"])
+            drv = dexp.appetite_drivers(row)
+            for d in drv:
+                # industry_class_naics is a fixed constant in base_row() ("Manufacturing"),
+                # never varied by level - and Manufacturing genuinely sits over the real 15%
+                # concentration cap (16.36%) regardless of how favorable everything else is,
+                # so its driver correctly stays unfavorable even in a "best" scenario. Not a
+                # bug - skip it here rather than asserting something that was never true.
+                if d["label"].startswith("Industry Concentration"):
+                    continue
+                is_favorable = d["direction"] == "increases"
+                if is_favorable != want_favorable:
+                    issues.append(f"{lob}/{level}: '{d['label']}' reported direction="
+                                   f"'{d['direction']}' ({'favorable' if is_favorable else 'unfavorable'}) "
+                                   f"but this is a {level} scenario - expected the opposite")
+    print(f"  {len(ALL_LOBS) * 2} scenarios checked, {len(issues)} issues")
+    for i in issues:
+        print("   ", i)
+
+
 if __name__ == "__main__":
     stage_1_best_worst()
     stage_2_monotonicity()
@@ -460,3 +541,5 @@ if __name__ == "__main__":
     stage_11_decision_layer_consistency()
     stage_12_exposure_unit_scaling()
     stage_13_direct_channel_no_broker()
+    stage_14_appetite_driver_direction()
+    stage_14b_loss_bind_driver_direction()

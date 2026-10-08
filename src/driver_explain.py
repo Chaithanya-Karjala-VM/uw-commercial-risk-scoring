@@ -217,7 +217,18 @@ def appetite_drivers(row_dict, top_n=5):
     state_component = max(0, min(100, 50 + state_headroom_pct * STATE_HEADROOM_SCALE))
     results.append((f"State Capacity: {state}", HEADROOM_WEIGHT * (state_component - 50)))
 
-    # sign convention: these are "fit"/"headroom" contributions where POSITIVE means better
-    # appetite (unlike loss/bind above, where positive means worse) - flip here so direction
-    # labeling stays consistent everywhere ("increases" always means "moves the risk view up")
-    return _normalize([(label, -val) for label, val in results], top_n)
+    # No sign flip needed here, and a flip used to be applied - real bug, caught via a client
+    # screenshot 2026-10 showing Financial Stability Score = 88 (well above the book baseline
+    # of 57, genuinely favorable) rendering as a RED/unfavorable bar. Root cause: "direction"
+    # means "this field increases the score's own raw underlying value" everywhere else in
+    # this file (loss_drivers' delta is base-minus-neutral loss ratio, bind_drivers' is signed
+    # straight off BIND_COEFFICIENTS, neither flips) - the UI's good_direction parameter is
+    # what turns that raw direction into "favorable" per panel (good_direction="decreases" for
+    # Loss, since a higher loss ratio is bad; "increases" for Bind AND Appetite, since a higher
+    # score is good for both). Appetite's own raw values here are already correctly signed
+    # that same way (financial_stability_score's positive fit coefficient times a positive
+    # (value-baseline) IS the raw increase in appetite score) - the removed flip inverted every
+    # single driver in this function, not just this one field, so every genuinely favorable
+    # factor (financial stability, Platinum broker tier, target growth segment) was rendering
+    # red and every unfavorable one would have rendered green.
+    return _normalize(results, top_n)

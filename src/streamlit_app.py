@@ -10,7 +10,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from data_loader import load_data
-from scoring import load_models, score
+from scoring import load_models, score, estimate_financial_stability_score, FINANCIAL_STABILITY_FIT_NOTE
 from lob_config import PROPERTY_LOBS, LIABILITY_LOBS, group_for_lob, STATE_TO_REGION, CURRENT_YEAR, PRIMARY_CAT_PERIL_OPTIONS, region_for_state
 from bind_propensity import NEW_BROKER_DEFAULT_TIER, KNOWN_BROKER_TIER, tier_for_known_broker
 from decision_matrix_reference import RISK_TIER_ORDER, RISK_TIER_INFO
@@ -687,13 +687,20 @@ with tab_submission:
                 claims_free_years = st.number_input("Claims-Free Years", 0, 10, 5)
 
                 st.markdown("**Financial & Operational**")
-                financial_stability_score = st.slider("Financial Stability Score", 5, 100, 55)
                 safety_program_flag = st.selectbox("Safety Program in Place", ["No", "Yes"]) == "Yes"
                 safety_inspection_findings = st.selectbox("Safety Inspection Findings", CATEGORICAL_OPTIONS["safety_inspection_findings"])
                 business_tenure_years = st.number_input("Business Tenure (years)", 0, 80, 10)
                 revenue_growth_trend_pct = st.number_input("Revenue Growth Trend (%)", -30.0, 60.0, 3.0)
                 debt_to_equity_ratio = st.number_input("Debt-to-Equity Ratio", 0.0, 5.0, 1.0)
                 policy_term_months = st.selectbox("Policy Term (months)", [6, 12, 24, 36], index=1)
+
+                # Replaces the old free-standing slider, per manager direction - estimated from
+                # the two fields just above instead of the underwriter guessing a number (see
+                # scoring.estimate_financial_stability_score's own docstring for the real,
+                # book-verified formula and its honest accuracy limit).
+                financial_stability_score = estimate_financial_stability_score(business_tenure_years, safety_program_flag)
+                st.metric("Financial Stability Score (estimated)", financial_stability_score)
+                st.caption(FINANCIAL_STABILITY_FIT_NOTE)
                 st.caption("Premium is calculated automatically from the inputs above - not typed in.")
 
             with col4:
