@@ -698,8 +698,23 @@ with tab_submission:
                 # the two fields just above instead of the underwriter guessing a number (see
                 # scoring.estimate_financial_stability_score's own docstring for the real,
                 # book-verified formula and its honest accuracy limit).
+                #
+                # Shown as a plain styled box, not a real widget - a disabled st.number_input
+                # was tried first, but "disabled" unavoidably renders faded/greyed in Streamlit
+                # (that's the framework's own built-in disabled treatment, not something this
+                # app's CSS added) and still shows +/- stepper buttons that do nothing, which
+                # read as broken rather than read-only. This renders full-strength text, same
+                # font/size as every other field label+value in the form (inherits the page's
+                # own base font-family/size rather than redefining one), with no interactive
+                # control at all - nothing to click, nothing to fade.
                 financial_stability_score = estimate_financial_stability_score(business_tenure_years, safety_program_flag)
-                st.metric("Financial Stability Score (estimated)", financial_stability_score)
+                st.markdown(f"""
+                <div style="margin-bottom:0.6rem;">
+                    <div style="color:{TEXT_MUTED}; font-size:0.95rem; margin-bottom:0.35rem;">Financial Stability Score (estimated)</div>
+                    <div style="background:{CARD_BG if IS_DARK else '#F2F4F8'}; border:1px solid {CARD_BORDER};
+                                border-radius:8px; padding:0.5rem 0.75rem; color:{TEXT_MAIN};">{financial_stability_score}</div>
+                </div>
+                """, unsafe_allow_html=True)
                 st.caption(FINANCIAL_STABILITY_FIT_NOTE)
                 st.caption("Premium is calculated automatically from the inputs above - not typed in.")
 
