@@ -1,8 +1,10 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 .DS_Store
 .streamlit/secrets.toml
+*.log
 
 # generated output, not source - regenerate locally with combine_scores.py / data_audit.py
 reports/*.xlsx

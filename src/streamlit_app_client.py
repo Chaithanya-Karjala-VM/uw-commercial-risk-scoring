@@ -804,6 +804,30 @@ with tab_dashboard:
         """, unsafe_allow_html=True)
 
         # ---- Steps 4-5 side by side: Triage on the left, Drivers on the right. ----
+        # Driver + narrative computation moved up here so both columns can use it: the
+        # narration panel (left, under Triage - there's real empty space there since Triage
+        # is short and Drivers runs long) and the toggleable bar list (right) both read off
+        # the same real loss/appetite/bind drivers for whatever's selected - a single case,
+        # or the real representative submission for an aggregate/group view.
+        def _db_score_fn(d):
+            return score(d, get_models()).iloc[0]
+
+        if sel_row is not None:
+            drv_row_df = book[book["submission_id"] == sel_id]
+            drv_row_dict = drv_row_df.iloc[0].to_dict()
+            drv_source = sel_row
+        else:
+            # Real submission closest to the pool's own mean UW score stands in as a
+            # representative example - never a synthetic/blended row.
+            closest_idx = (pool["uw_score_v2"] - uw_v).abs().idxmin()
+            drv_row_df = pool.loc[[closest_idx]]
+            drv_row_dict = drv_row_df.iloc[0].to_dict()
+            drv_source = drv_row_df.iloc[0]
+
+        loss_drv = dexp.loss_drivers(drv_row_df, _db_score_fn)
+        bind_drv = dexp.bind_drivers(drv_row_dict)
+        appetite_drv = dexp.appetite_drivers(drv_row_dict)
+
         tri_col, drv_col = st.columns(2)
         with tri_col:
             _section_label("Step 4 · Triage")
@@ -832,31 +856,28 @@ with tab_dashboard:
             else:
                 st.caption(f"Average position for the {len(pool):,} filtered submission(s) shown above.")
 
+            # ---- Narration panel: one crisp, combined explanation covering all 3 score
+            # types at once (not tied to whichever toggle is picked on the right) - sits in
+            # the real empty space under the Triage bar, since Triage is short and the
+            # Drivers list on the right runs long. Works identically for a single selected
+            # case or a representative example standing in for an aggregate/group view -
+            # build_narrative() already explains hard-rule declines, score-based declines,
+            # and Preferred cases clearly (verified against real examples of each before
+            # building this), so no case type is a special case here. ----
+            st.markdown('<div class="cv-sub" style="margin-top:0.9rem;">Why This Decision</div>', unsafe_allow_html=True)
+            narrative_text = build_narrative(drv_source, loss_drv, bind_drv, appetite_drv)
+            st.markdown(f'<div style="background:{CARD_BG}; border:1px solid {CARD_BORDER}; border-radius:8px; '
+                        f'padding:10px 14px; font-size:0.86rem; color:{TEXT_MAIN}; line-height:1.55;">{narrative_text}</div>',
+                        unsafe_allow_html=True)
+            if sel_row is None:
+                st.caption(f"Based on **{drv_source['submission_id']}**, the real submission closest "
+                           f"to this segment's average UW score ({uw_v:.1f}) - not a blended/synthetic case.")
+
         with drv_col:
             _section_label("Step 5 · What's Driving the Score")
             driver_view = st.radio("Driver view", ["UW Score", "Loss", "Appetite", "Bind"], horizontal=True,
                                     key="db_driver_view", label_visibility="collapsed")
 
-            def _db_score_fn(d):
-                return score(d, get_models()).iloc[0]
-
-            if sel_row is not None:
-                drv_row_df = book[book["submission_id"] == sel_id]
-                drv_row_dict = drv_row_df.iloc[0].to_dict()
-                drv_source = sel_row
-            else:
-                # Real submission closest to the pool's own mean UW score stands in as a
-                # representative example - never a synthetic/blended row.
-                closest_idx = (pool["uw_score_v2"] - uw_v).abs().idxmin()
-                drv_row_df = pool.loc[[closest_idx]]
-                drv_row_dict = drv_row_df.iloc[0].to_dict()
-                drv_source = drv_row_df.iloc[0]
-                st.caption(f"Representative example — **{drv_source['submission_id']}**, the real submission closest "
-                           f"to this segment's average UW score ({uw_v:.1f}).")
-
-            loss_drv = dexp.loss_drivers(drv_row_df, _db_score_fn)
-            bind_drv = dexp.bind_drivers(drv_row_dict)
-            appetite_drv = dexp.appetite_drivers(drv_row_dict)
             if driver_view == "UW Score":
                 tagged = [(d, "Loss") for d in loss_drv[:2]] + [(d, "Appetite") for d in appetite_drv[:2]] + [(d, "Bind") for d in bind_drv[:2]]
                 tagged = sorted(tagged, key=lambda t: -t[0]["weight"])[:6]
@@ -883,9 +904,6 @@ with tab_dashboard:
                     f'<span class="cv-chip" style="margin:0; background:{_rgba(tag_color[score_type],0.15)}; '
                     f'border-color:{_rgba(tag_color[score_type],0.5)}; color:{tag_color[score_type]};">{score_type}</span></div>',
                     unsafe_allow_html=True)
-
-            summary_line = build_banner_summary(drv_source, loss_drv, bind_drv)
-            st.caption(f"**Summary:** {summary_line}")
 
 # ===========================================================================
 # FEATURE MAP - identical data/logic to the existing app's Feature Map tab (reuses

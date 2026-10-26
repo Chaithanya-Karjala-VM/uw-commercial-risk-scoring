@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Assisted Underwriting - UW Workbench</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+</head>
+<body>
+<div class="app-header">
+    <div style="display:flex; align-items:center; gap:14px;">
+        <img src="assets/vm_logo.png" alt="Value Momentum" style="height:34px; width:auto;">
+        <div>
+            <div class="title">Assisted Underwriting &middot; UW Workbench</div>
+        </div>
+    </div>
+</div>
+
+<div class="tab-bar">
+    <button class="tab-btn active" data-page="page-underwriting">Underwriting file</button>
+    <button class="tab-btn" data-page="page-portfolio">Portfolio</button>
+    <button class="tab-btn" data-page="page-feature-map">Feature map</button>
+    <button class="tab-btn" data-page="page-model-note">Model note</button>
+    <button class="tab-btn" data-page="page-whatif">What-If Simulator</button>
+</div>
+
+<div id="page-underwriting" class="page active"></div>
+<div id="page-portfolio" class="page"></div>
+<div id="page-feature-map" class="page"></div>
+<div id="page-model-note" class="page"></div>
+<div id="page-whatif" class="page"></div>
+
+<script src="js/api.js"></script>
+<script src="js/underwriting-file.js"></script>
+<script src="js/portfolio.js"></script>
+<script src="js/feature-map.js"></script>
+<script src="js/model-note.js"></script>
+<script src="js/what-if.js"></script>
+<script>
+function openTab(pageId) {
+    document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".page").forEach((p) => p.classList.remove("active"));
+    const btn = document.querySelector(`.tab-btn[data-page="${pageId}"]`);
+    if (btn) btn.classList.add("active");
+    const page = document.getElementById(pageId);
+    page.classList.add("active");
+    if (page.dataset.loaded !== "1") {
+        page.dataset.loaded = "1";
+        if (pageId === "page-underwriting") initUnderwritingFile();
+        if (pageId === "page-portfolio") initPortfolio();
+        if (pageId === "page-feature-map") initFeatureMap();
+        if (pageId === "page-model-note") initModelNote();
+        if (pageId === "page-whatif") initWhatIf();
+    }
+}
+document.querySelectorAll(".tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => openTab(btn.dataset.page));
+});
+// load the first (default) tab immediately
+initUnderwritingFile();
+document.getElementById("page-underwriting").dataset.loaded = "1";
+</script>
+</body>
+</html>
