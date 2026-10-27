@@ -70,9 +70,9 @@ function renderPfFlow() {
         </div>
         ${arrow}
         <div style="${box} padding:10px 14px; min-width:260px;">
-            <div style="${mini}"><b style="color:var(--bad); font-size:0.76rem;">LOSS PROPENSITY</b><br><span class="caption" style="font-size:0.7rem;">expected loss &mdash; 0 best / 100 worst</span></div>
+            <div style="${mini}"><b style="color:var(--bad); font-size:0.76rem;">LOSS SCORE</b><br><span class="caption" style="font-size:0.7rem;">expected loss &mdash; 0 best / 100 worst</span></div>
             <div style="${mini}"><b style="color:var(--good); font-size:0.76rem;">APPETITE SCORE</b><br><span class="caption" style="font-size:0.7rem;">fit with appetite &amp; capacity</span></div>
-            <div style="${mini}; margin-bottom:0;"><b style="color:var(--accent); font-size:0.76rem;">BIND PROPENSITY</b><br><span class="caption" style="font-size:0.7rem;">likelihood we win it</span></div>
+            <div style="${mini}; margin-bottom:0;"><b style="color:var(--accent); font-size:0.76rem;">BIND SCORE</b><br><span class="caption" style="font-size:0.7rem;">likelihood we win it</span></div>
         </div>
         ${arrow}
         <div style="${box} padding:12px 16px; min-width:170px; align-items:center; text-align:center;">
@@ -294,8 +294,8 @@ function renderPfQuadrant(data) {
         // Plotly axis/annotation text is plain text, not HTML - an "&rarr;" entity renders as
         // the literal 6 characters, not an arrow. Use the real Unicode glyph instead.
         height: 300, margin: { l: 60, r: 10, t: 10, b: 70 }, shapes, annotations,
-        xaxis: { title: "Loss Propensity (worse →)", range: [xLo, xHi], automargin: true },
-        yaxis: { title: "Bind Propensity (more likely →)", range: [yLo - yPad, yHi + yPad], automargin: true },
+        xaxis: { title: "Loss Score (worse →)", range: [xLo, xHi], automargin: true },
+        yaxis: { title: "Bind Score (more likely →)", range: [yLo - yPad, yHi + yPad], automargin: true },
         legend: { orientation: "h", y: -0.2, font: { size: 10 } },
         paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)", font: { color: cssVal("var(--text-main)"), size: 11 },
     }, { displayModeBar: false, responsive: true });
@@ -324,7 +324,7 @@ function renderPfLobTable(data) {
 
 function renderPfGrid(data) {
     const toggle = document.getElementById("pf-grid-metric-toggle");
-    const metrics = [["uw_score", "UW Score"], ["loss", "Loss"], ["appetite", "Appetite"], ["bind", "Bind"], ["loss_ratio", "Loss Ratio"], ["hard_fail_pct", "Hard-Fail %"]];
+    const metrics = [["uw_score", "UW Score"], ["loss", "Loss"], ["appetite", "Appetite"], ["bind", "Bind"]];
     toggle.innerHTML = metrics.map(([k, label]) =>
         `<button class="btn ${portfolioState.gridMetric === k ? "active-toggle" : ""}" data-metric="${k}">${label}</button>`).join("");
     toggle.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {

@@ -674,7 +674,7 @@ def model_mechanics():
                 "Attritional Frequency = max(Predicted Frequency − Probability of Large Loss, 0)",
                 "Total Expected Loss Cost = Attritional Frequency × Severity + Probability of Large Loss × Expected Large-Loss Severity",
                 "Predicted Loss Ratio % = Total Expected Loss Cost / Premium × 100",
-                "Loss Propensity Score = clip(Predicted Loss Ratio %, 0, 100)",
+                "Loss Score = clip(Predicted Loss Ratio %, 0, 100)",
             ],
             # The real loss ratio's denominator - same honesty pattern as everywhere else in
             # this project: the book's own real premium is used whenever a submission has one,
@@ -706,7 +706,7 @@ def model_mechanics():
             "weight_pct": 20,
             "is_trained_ml": False,
             "note": "Fitted via real linear regression against the source book's own bind_propensity_score_0_100 - rules-based in form, but the coefficients themselves come from real data, not hand-picked.",
-            "formula": "Bind Propensity Score = Intercept + Σ(coefficient × real input)",
+            "formula": "Bind Score = Intercept + Σ(coefficient × real input)",
             "coefficients": bc,
             "groups": {
                 "Broker quality ingredients": ["broker_hit_bind_ratio_pct", "broker_renewal_retention_pct", "broker_product_diversity_count", "broker_geo_diversity_count", "broker_profitability_score_0_100"],
@@ -716,8 +716,8 @@ def model_mechanics():
             },
         },
         "uw_score": {
-            "formula": "UW Score = 0.50×(100−Loss Propensity) + 0.30×Appetite/Capacity + 0.20×Bind Propensity",
-            "note": "Loss uses (100-Loss) since Loss Propensity runs 0=best/100=worst, the opposite sense of Appetite/Bind.",
+            "formula": "UW Score = 0.50×(100−Loss Score) + 0.30×Appetite/Capacity + 0.20×Bind Score",
+            "note": "Loss uses (100-Loss) since Loss Score runs 0=best/100=worst, the opposite sense of Appetite/Bind.",
             "tiers": [{"name": t, **RISK_TIER_INFO[t]} for t in RISK_TIER_ORDER],
         },
         "available_not_used": _compute_available_not_used(),

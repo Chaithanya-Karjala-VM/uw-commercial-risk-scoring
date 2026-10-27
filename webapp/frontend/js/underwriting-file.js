@@ -324,11 +324,11 @@ async function loadSubmissionDetail(id) {
             <div class="eyebrow">UW score</div>
             <div style="display:grid; grid-template-columns:420px 1fr; align-items:center; gap:14px;">
                 <div class="gauge-row" style="flex-wrap:nowrap; overflow-x:auto;">
-                    ${ringGaugeHtml(s.loss_propensity, "Loss Propensity", "0 best / 100 worst", "var(--bad)", 62)}
+                    ${ringGaugeHtml(s.loss_propensity, "Loss Score", "0 best / 100 worst", "var(--bad)", 62)}
                     <div class="plus-sign">+</div>
                     ${ringGaugeHtml(s.appetite_capacity, "Appetite / Capacity", "higher = better fit", "var(--good)", 62)}
                     <div class="plus-sign">+</div>
-                    ${ringGaugeHtml(s.bind_propensity, "Bind Propensity", "higher = more likely", "var(--accent)", 62)}
+                    ${ringGaugeHtml(s.bind_propensity, "Bind Score", "higher = more likely", "var(--accent)", 62)}
                     <div class="equals-sign">=</div>
                 </div>
                 <div>

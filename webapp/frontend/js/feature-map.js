@@ -9,13 +9,13 @@ async function initFeatureMap() {
             <div class="caption" style="margin-bottom:10px;">Which real input fields feed each of the three scores - grouped by category, with a one-line reason for each.</div>
             <div class="filter-row">
                 <div class="filter-item"><label class="field-label">Line of Business</label>
-                    <select id="fm-lob" title="Bind and Appetite never change by line - only Loss Propensity's own column narrows to that line's real feature set.">
+                    <select id="fm-lob" title="Bind and Appetite never change by line - only Loss Score's own column narrows to that line's real feature set.">
                         ${lobOptions.map((l) => `<option>${escapeHtml(l)}</option>`).join("")}
                     </select></div>
             </div>
             <div class="kpi-row" id="fm-kpis"></div>
             <table class="data-table fm-table">
-                <thead><tr><th>Category</th><th>Field</th><th class="fm-check">Loss Propensity</th><th class="fm-check">Bind Propensity</th><th class="fm-check">Appetite / Capacity</th><th>Why</th></tr></thead>
+                <thead><tr><th>Category</th><th>Field</th><th class="fm-check">Loss Score</th><th class="fm-check">Bind Score</th><th class="fm-check">Appetite / Capacity</th><th>Why</th></tr></thead>
                 <tbody id="fm-rows"></tbody>
             </table>
         </div>
@@ -28,8 +28,8 @@ async function refreshFeatureMap() {
     const lob = document.getElementById("fm-lob").value;
     const data = await apiGet("/api/feature-map", { lob });
     document.getElementById("fm-kpis").innerHTML = `
-        <div class="kpi-card"><div class="label">Loss Propensity</div><div class="value">${data.loss_field_count} fields</div></div>
-        <div class="kpi-card"><div class="label">Bind Propensity</div><div class="value">${data.bind_field_count} fields</div></div>
+        <div class="kpi-card"><div class="label">Loss Score</div><div class="value">${data.loss_field_count} fields</div></div>
+        <div class="kpi-card"><div class="label">Bind Score</div><div class="value">${data.bind_field_count} fields</div></div>
         <div class="kpi-card"><div class="label">Appetite / Capacity</div><div class="value">${data.appetite_field_count} fields</div></div>
     `;
     const check = (b) => b ? `<span class="fm-dot fm-dot-yes">&#10003;</span>` : `<span class="fm-dot fm-dot-no"></span>`;

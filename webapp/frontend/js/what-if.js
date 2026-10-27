@@ -143,8 +143,8 @@ function wiCalcRows(t) {
         ["Expected Large-Loss Severity ($)", t.expected_large_severity],
         ["Total Expected Loss Cost ($)", t.total_expected_loss_cost],
         ["Predicted Loss Ratio (%)", t.predicted_loss_ratio_pct],
-        ["Loss Propensity Score", t.loss_propensity_score],
-        ["Bind Propensity Score", t.bind_propensity_score],
+        ["Loss Score", t.loss_propensity_score],
+        ["Bind Score", t.bind_propensity_score],
         ["Appetite/Capacity Score", t.appetite_capacity_score],
         ["Composite UW Score", t.composite_uw_score],
         ["Risk Tier", t.risk_tier],
@@ -202,8 +202,8 @@ function renderWhatIfResult(result) {
 
         <div class="kpi-row">
             <div class="kpi-card"><div class="label">Composite UW Score</div><div class="value">${fmtNum(s.uw_score)}/100</div></div>
-            <div class="kpi-card"><div class="label">Loss Propensity Score</div><div class="value">${fmtNum(s.loss_propensity)}</div></div>
-            <div class="kpi-card"><div class="label">Bind Propensity Score</div><div class="value">${fmtNum(s.bind_propensity)}</div></div>
+            <div class="kpi-card"><div class="label">Loss Score</div><div class="value">${fmtNum(s.loss_propensity)}</div></div>
+            <div class="kpi-card"><div class="label">Bind Score</div><div class="value">${fmtNum(s.bind_propensity)}</div></div>
             <div class="kpi-card"><div class="label">Appetite Score</div><div class="value">${fmtNum(s.appetite_capacity)}</div></div>
         </div>
 
@@ -221,7 +221,7 @@ function renderWhatIfResult(result) {
                     ${divergeCol(lossDrv, "decreases", "No material drivers vs. book baseline.")}
                 </div>
                 <div>
-                    <div class="sub-label">Bind Propensity Drivers</div>
+                    <div class="sub-label">Bind Score Drivers</div>
                     ${divergeCol(bindDrv, "increases", "No material drivers vs. book baseline.")}
                 </div>
                 <div>

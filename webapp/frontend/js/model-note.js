@@ -27,10 +27,7 @@ function mechLabel(key) {
 }
 async function initModelNote() {
     const root = document.getElementById("page-model-note");
-    const [mech, fm] = await Promise.all([
-        apiGet("/api/model-mechanics"),
-        apiGet("/api/feature-map", { lob: "All Lines" }),
-    ]);
+    const mech = await apiGet("/api/model-mechanics");
 
     root.innerHTML = `
         <div class="caption" style="margin-bottom:10px;">How each of the 3 scores is actually built - weights, hard rules, and the real fitted coefficients, pulled live from the scoring modules.</div>
@@ -43,20 +40,14 @@ async function initModelNote() {
 
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:14px;">
             <div class="mech-card">
-                <div class="mech-title">${mechNum(5)}Outputs per submission</div>
+                <div class="mech-title">Outputs per submission</div>
                 <div style="font-size:0.84rem; line-height:1.6;">Reason for decline/refer &middot; priority reason &middot; emerging-risk flags (financial stability, debt-to-equity, revenue trend, business tenure, safety, CAT zone, competing quotes) &middot; flag count</div>
             </div>
             <div class="mech-card">
-                <div class="mech-title">${mechNum(6)}Available, not yet used</div>
+                <div class="mech-title">Available, not yet used</div>
                 <div>${mech.available_not_used.map((f) => `<span class="mech-chip">${escapeHtml(f.label)}</span>`).join("")}</div>
                 <div class="caption" style="margin-top:6px;">Real columns in the data, confirmed not used as an input to Loss, Appetite, or Bind today - checked programmatically against the real feature lists, not assumed.</div>
             </div>
-        </div>
-
-        <div class="card">
-            <div class="mech-title" style="margin-bottom:10px;">${mechNum(7)}Field list &mdash; by category and score</div>
-            <div class="caption" style="margin-bottom:10px;">Real input fields, rolled up by category (same categories as the Feature Map tab) - which score each category's fields feed, at a glance. Per-field detail with reasons lives on the Feature Map tab.</div>
-            ${renderFieldSummaryTable(fm.rows)}
         </div>
     `;
 }
@@ -64,9 +55,8 @@ async function initModelNote() {
 function renderLossCard(loss) {
     return `
     <div class="mech-card" style="border-color:var(--bad);">
-        <div class="mech-title" style="color:var(--bad);">${mechNum(1)}Loss propensity &mdash; weight ${loss.weight_pct}% &middot; 0 best, 100 worst</div>
+        <div class="mech-title" style="color:var(--bad);">Loss score &mdash; weight ${loss.weight_pct}% &middot; 0 best, 100 worst</div>
         <div class="mech-question">How much loss do we expect from this risk?</div>
-        <div class="override-banner" style="margin-bottom:10px;">&#9888; <b>Trained ML, not a fixed formula.</b> ${escapeHtml(loss.note)}</div>
         <div class="mech-group-label">Real pipeline (3 trained models)</div>
         <div>${loss.models.map((m) => `<span class="mech-chip">${escapeHtml(m)}</span>`).join("")}</div>
         <div class="formula-box">${loss.pipeline.map((l) => escapeHtml(l)).join("<br>")}</div>
@@ -81,7 +71,7 @@ function renderAppetiteCard(ap) {
     const fitChips = Object.entries(ap.fit_coefficients).map(([k, v]) => `<span class="mech-chip">${escapeHtml(mechLabel(k))}: ${v}</span>`).join("");
     return `
     <div class="mech-card" style="border-color:var(--good);">
-        <div class="mech-title" style="color:var(--good);">${mechNum(2)}Appetite / capacity &mdash; weight ${ap.weight_pct}% &middot; 0-100</div>
+        <div class="mech-title" style="color:var(--good);">Appetite / capacity &mdash; weight ${ap.weight_pct}% &middot; 0-100</div>
         <div class="mech-question">May we write it, and do we have room?</div>
         <div class="mech-group-label">Hard-rule gate (fail &rarr; score 0, Decline)</div>
         <div>${ap.hard_rules.map((r) => `<span class="mech-chip">${escapeHtml(r)}</span>`).join("")}</div>
@@ -103,7 +93,7 @@ function renderBindCard(bind) {
     `).join("");
     return `
     <div class="mech-card" style="border-color:var(--accent);">
-        <div class="mech-title" style="color:var(--accent);">${mechNum(3)}Bind propensity &mdash; weight ${bind.weight_pct}% &middot; 0-100</div>
+        <div class="mech-title" style="color:var(--accent);">Bind score &mdash; weight ${bind.weight_pct}% &middot; 0-100</div>
         <div class="mech-question">If we quote, will the broker bind with us?</div>
         <div class="caption">${escapeHtml(bind.note)}</div>
         ${groupHtml}
@@ -121,29 +111,9 @@ function renderUwCard(uw) {
         </div>`).join("");
     return `
     <div class="mech-card" style="border-color:var(--navy);">
-        <div class="mech-title" style="color:var(--navy);">${mechNum(4)}UW score &rarr; triage</div>
+        <div class="mech-title" style="color:var(--navy);">UW score &rarr; triage</div>
         <div class="formula-box">${escapeHtml(uw.formula)}</div>
         <div class="caption" style="margin:4px 0 10px;">${escapeHtml(uw.note)}</div>
         ${tierRows}
     </div>`;
-}
-
-function renderFieldSummaryTable(rows) {
-    const order = ["Claims & Financial History", "Property & Building", "Catastrophe & Location", "Workforce", "Broker & Deal", "Compliance & Strategy"];
-    const groups = {};
-    for (const r of rows) {
-        const cat = r.Category;
-        if (!groups[cat]) groups[cat] = { loss: [], bind: [], appetite: [] };
-        if (r["Loss Propensity"]) groups[cat].loss.push(r.Field);
-        if (r["Bind Propensity"]) groups[cat].bind.push(r.Field);
-        if (r["Appetite / Capacity"]) groups[cat].appetite.push(r.Field);
-    }
-    const cats = order.filter((c) => groups[c]).concat(Object.keys(groups).filter((c) => !order.includes(c)));
-    const cell = (list) => list.length ? escapeHtml(list.join(", ")) : '<span class="muted">&mdash;</span>';
-    return `<table class="data-table fm-table">
-        <thead><tr><th>Category</th><th>Loss</th><th>Bind</th><th>Appetite</th></tr></thead>
-        <tbody>
-            ${cats.map((c) => `<tr><td><b>${escapeHtml(c)}</b></td><td>${cell(groups[c].loss)}</td><td>${cell(groups[c].bind)}</td><td>${cell(groups[c].appetite)}</td></tr>`).join("")}
-        </tbody>
-    </table>`;
 }
