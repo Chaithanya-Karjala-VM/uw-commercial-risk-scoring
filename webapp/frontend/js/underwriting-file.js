@@ -279,6 +279,25 @@ async function loadSubmissionDetail(id) {
     const apDecisionShort = UF_SHORT_DECISION[exp.appetite_decision] || exp.appetite_decision || "—";
     const bindTier = ufBindTier(bb.bind_score);
 
+    // Manager direction: when a sub-score has been forced to its extreme auto-fail/auto-cap
+    // value (Loss 100, Appetite 0, or Bind 0), the composite UW Score number isn't a
+    // meaningful number to show - one input already dominates it. Show why instead, in
+    // priority order (the hard-rule veto first, since it overrides Loss/Bind regardless).
+    const failedRules = d.decision_dimensions.appetite_eligibility.checks.filter((c) => !c.passed).map((c) => c.rule);
+    let uwSuppressReason = null;
+    if (s.appetite_capacity === 0 && failedRules.length) {
+        uwSuppressReason = `Appetite/Capacity is 0 &mdash; fails hard rule${failedRules.length > 1 ? "s" : ""}: <b>${failedRules.map(escapeHtml).join(", ")}</b>. Decline regardless of Loss or Bind.`;
+    } else if (s.loss_propensity === 100) {
+        uwSuppressReason = loss.flags
+            ? `Loss Score is at its maximum (100) &mdash; driven by: <b>${escapeHtml(loss.flags)}</b>.`
+            : `Loss Score is at its maximum (100) &mdash; predicted loss ratio exceeds 100% of premium.`;
+    } else if (s.bind_propensity === 0) {
+        const topBindDrv = [...d.drivers.bind].filter((dr) => dr.direction === "decreases").sort((a, b) => b.weight - a.weight)[0];
+        uwSuppressReason = topBindDrv
+            ? `Bind Score is at its floor (0) &mdash; largest factor: <b>${escapeHtml(topBindDrv.label)}</b>.`
+            : `Bind Score is at its floor (0).`;
+    }
+
     // Real, honest capacity signal distinct from the hard-fail override above: when treaty/
     // concentration headroom is tight the real model does NOT automatically downgrade the
     // tier (only the 4 hard rules force a Decline) - flagged here as advisory information an
@@ -322,32 +341,42 @@ async function loadSubmissionDetail(id) {
 
         <div class="card" style="padding:14px 18px;">
             <div class="eyebrow">UW score</div>
-            <div style="display:grid; grid-template-columns:420px 1fr; align-items:center; gap:14px;">
-                <div class="gauge-row" style="flex-wrap:nowrap; overflow-x:auto;">
-                    ${ringGaugeHtml(s.loss_propensity, "Loss Score", "0 best / 100 worst", "var(--bad)", 62)}
-                    <div class="plus-sign">+</div>
-                    ${ringGaugeHtml(s.appetite_capacity, "Appetite / Capacity", "higher = better fit", "var(--good)", 62)}
-                    <div class="plus-sign">+</div>
-                    ${ringGaugeHtml(s.bind_propensity, "Bind Score", "higher = more likely", "var(--accent)", 62)}
-                    <div class="equals-sign">=</div>
+            <div style="display:grid; grid-template-columns:7fr 3fr; gap:20px; align-items:start;">
+                <div>
+                    <div style="display:grid; grid-template-columns:420px 1fr; align-items:center; gap:14px;">
+                        <div class="gauge-row" style="flex-wrap:nowrap; overflow-x:auto;">
+                            ${ringGaugeHtml(s.loss_propensity, "Loss Score", "0 best / 100 worst", "var(--bad)", 62)}
+                            <div class="plus-sign">+</div>
+                            ${ringGaugeHtml(s.appetite_capacity, "Appetite / Capacity", "higher = better fit", "var(--good)", 62)}
+                            <div class="plus-sign">+</div>
+                            ${ringGaugeHtml(s.bind_propensity, "Bind Score", "higher = more likely", "var(--accent)", 62)}
+                            <div class="equals-sign">=</div>
+                        </div>
+                        <div>
+                            <div class="caption" style="font-size:0.76rem;">Composite UW Score</div>
+                            <div style="display:flex; align-items:center; gap:10px;">
+                                ${uwSuppressReason ? "" : `<span style="font-weight:800; font-size:1.7rem; color:var(--navy);">${fmtNum(s.uw_score)}</span>`}
+                                ${tierChip(s.risk_tier)}
+                            </div>
+                            ${uwSuppressReason ? `<div class="caption" style="margin-top:4px;">${uwSuppressReason}</div>` : ""}
+                        </div>
+                    </div>
+                    ${uwSuppressReason ? "" : `<div style="margin-top:14px; position:relative;">
+                        <div style="display:flex; border-radius:6px; overflow:hidden;">${triageBar}</div>
+                        <div style="position:absolute; left:${markerPct}%; top:-3px; width:3px; height:28px; background:var(--text-main);"></div>
+                    </div>`}
+                    <div class="caption" style="margin-top:6px;">Model recommends: <b>${escapeHtml(s.recommended_action)}</b></div>
                 </div>
                 <div>
-                    <div class="caption" style="font-size:0.76rem;">Composite UW Score</div>
-                    <div style="display:flex; align-items:center; gap:10px;">
-                        <span style="font-weight:800; font-size:1.7rem; color:var(--navy);">${fmtNum(s.uw_score)}</span>
-                        ${tierChip(s.risk_tier)}
+                    <div class="sub-label" style="margin-top:0;">UW Score blend</div>
+                    <div class="formula-box">
+                        Loss: 0.50 &times; (100 &minus; ${fmtNum(s.loss_propensity)}) = ${d.calc_trail.uw_blend.loss_term}<br>
+                        Appetite: 0.30 &times; ${fmtNum(s.appetite_capacity)} = ${d.calc_trail.uw_blend.appetite_term}<br>
+                        Bind: 0.20 &times; ${fmtNum(s.bind_propensity)} = ${d.calc_trail.uw_blend.bind_term}<br>
+                        <b>UW Score = ${d.calc_trail.uw_blend.total}</b>
                     </div>
-                    <div class="caption" style="margin-top:4px;">Pricing (loss-only tier): ${tierChip(s.loss_only_tier)} &mdash; the workbook prices from loss only</div>
                 </div>
             </div>
-            <div style="display:grid; grid-template-columns:420px 1fr; gap:14px; margin-top:14px;">
-                <div></div>
-                <div style="position:relative;">
-                    <div style="display:flex; border-radius:6px; overflow:hidden;">${triageBar}</div>
-                    <div style="position:absolute; left:${markerPct}%; top:-3px; width:3px; height:28px; background:var(--text-main);"></div>
-                </div>
-            </div>
-            <div class="caption" style="margin-top:6px;">Model recommends: <b>${escapeHtml(s.recommended_action)}</b></div>
         </div>
 
         <div class="eyebrow" style="margin:4px 0 2px;">Decision dimensions</div>
@@ -367,20 +396,7 @@ async function loadSubmissionDetail(id) {
             </div>
             <div class="card">
                 <div class="uf-dim-header">
-                    <div class="eyebrow">2 &middot; Loss &amp; complexity</div>
-                    ${ufPill(`Loss score ${fmtNum(s.loss_propensity, 0)} · loss tier ${s.loss_only_tier}`, TIER_COLORS[s.loss_only_tier])}
-                </div>
-                <div class="caption" style="margin-bottom:6px;">How risky is it?</div>
-                <div class="uf-dim-field">Current LR (CAT-dampened): <b style="color:${lrColor(loss.current_loss_ratio_pct)};">${fmtPct(loss.current_loss_ratio_pct)}</b></div>
-                <div class="uf-dim-field">Prior-period LR (5yr): <b style="color:${lrColor(loss.prior_period_loss_ratio_pct)};">${fmtPct(loss.prior_period_loss_ratio_pct)}</b></div>
-                <div class="uf-dim-field">Risk-factor expected LR: <b style="color:${lrColor(loss.risk_factor_expected_lr_pct)};">${fmtPct(loss.risk_factor_expected_lr_pct)}</b></div>
-                <div class="uf-dim-field">Hazard index: <b>${fmtNum(loss.hazard_index, 3)}</b></div>
-                <div class="uf-dim-field">Predicted LR (model, uncapped): <b style="color:${lrColor(loss.predicted_loss_ratio_pct)};">${fmtPct(loss.predicted_loss_ratio_pct)}</b></div>
-                ${loss.flags ? `<div class="caption" style="margin-top:6px;">Flags: <i>${escapeHtml(loss.flags)}</i></div>` : ""}
-            </div>
-            <div class="card">
-                <div class="uf-dim-header">
-                    <div class="eyebrow">3 &middot; Exposure &amp; capacity</div>
+                    <div class="eyebrow">2 &middot; Exposure &amp; capacity</div>
                     ${ufPill(apDecisionShort, apDecisionColor)}
                 </div>
                 <div class="caption" style="margin-bottom:6px;">Do we have room?</div>
@@ -389,6 +405,18 @@ async function loadSubmissionDetail(id) {
                 <div class="uf-dim-field" style="margin-top:4px;">Regional treaty headroom: <b style="color:${headroomColor(exp.regional_treaty_headroom_pct)};">${fmtPct(exp.regional_treaty_headroom_pct)}</b></div>
                 <div class="uf-dim-field">Country treaty headroom: <b style="color:${headroomColor(exp.country_treaty_headroom_pct)};">${fmtPct(exp.country_treaty_headroom_pct)}</b></div>
                 <div class="uf-dim-field">State treaty headroom: <b style="color:${headroomColor(exp.state_treaty_headroom_pct)};">${fmtPct(exp.state_treaty_headroom_pct)}</b></div>
+            </div>
+            <div class="card">
+                <div class="uf-dim-header">
+                    <div class="eyebrow">3 &middot; Loss &amp; complexity</div>
+                    ${ufPill(`Loss score ${fmtNum(s.loss_propensity, 0)} · loss tier ${s.loss_only_tier}`, TIER_COLORS[s.loss_only_tier])}
+                </div>
+                <div class="caption" style="margin-bottom:6px;">How risky is it?</div>
+                <div class="uf-dim-field">Current LR (CAT-dampened): <b style="color:${lrColor(loss.current_loss_ratio_pct)};">${fmtPct(loss.current_loss_ratio_pct)}</b></div>
+                <div class="uf-dim-field">Prior-period LR (5yr): <b style="color:${lrColor(loss.prior_period_loss_ratio_pct)};">${fmtPct(loss.prior_period_loss_ratio_pct)}</b></div>
+                <div class="uf-dim-field">Hazard index: <b>${fmtNum(loss.hazard_index, 3)}</b></div>
+                <div class="uf-dim-field">Predicted LR (model, uncapped): <b style="color:${lrColor(loss.predicted_loss_ratio_pct)};">${fmtPct(loss.predicted_loss_ratio_pct)}</b></div>
+                ${loss.flags ? `<div class="caption" style="margin-top:6px;">Flags: <i>${escapeHtml(loss.flags)}</i></div>` : ""}
             </div>
             <div class="card">
                 <div class="uf-dim-header">
@@ -411,32 +439,6 @@ async function loadSubmissionDetail(id) {
             <div class="sub-label" style="margin-top:8px;">Appetite</div>${d.drivers.appetite.length ? d.drivers.appetite.map((dr) => divergingBarHtml(dr, "increases")).join("") : `<div class="caption">Clean appetite profile.</div>`}
             <div class="sub-label" style="margin-top:8px;">Bind</div>${d.drivers.bind.length ? d.drivers.bind.map((dr) => divergingBarHtml(dr, "increases")).join("") : `<div class="caption">No material drivers vs. book baseline.</div>`}
             <div class="narrative-box" style="margin-top:10px;">${escapeHtml(d.narrative)}</div>
-        </div>
-
-        <div class="card">
-            <div style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;" id="uf-calc-trail-toggle">
-                <div class="eyebrow" style="margin-bottom:0;">Calculation trail (click to expand)</div>
-                <span class="caption">&#9660;</span>
-            </div>
-            <div id="uf-calc-trail-body" style="display:none; margin-top:10px;">
-                <div class="sub-label">Appetite Fit (one of two components - Appetite = 0.75&times;Fit + 0.25&times;Headroom)</div>
-                <table class="data-table"><thead><tr><th>Term</th><th>Coefficient</th><th>Input</th><th>Contribution</th></tr></thead>
-                <tbody>
-                    ${d.calc_trail.appetite_fit_terms.map((t) => `<tr><td>${escapeHtml(t.label)}</td>
-                        <td>${t.coefficient === null ? "&mdash;" : t.coefficient}</td>
-                        <td>${t.input === null ? "&mdash;" : t.input}</td>
-                        <td><b>${t.contribution}</b></td></tr>`).join("")}
-                    <tr style="font-weight:800;"><td colspan="3">Fit (raw sum, before 0-100 clip)</td><td>${d.calc_trail.appetite_fit_raw_sum}</td></tr>
-                    <tr style="font-weight:800;"><td colspan="3">Fit (after hard-rule gate)</td><td>${d.calc_trail.appetite_fit_after_hard_rule}</td></tr>
-                </tbody></table>
-                <div class="sub-label" style="margin-top:10px;">UW Score blend</div>
-                <div class="formula-box">
-                    Loss: 0.50 &times; (100 &minus; ${fmtNum(s.loss_propensity)}) = ${d.calc_trail.uw_blend.loss_term}<br>
-                    Appetite: 0.30 &times; ${fmtNum(s.appetite_capacity)} = ${d.calc_trail.uw_blend.appetite_term}<br>
-                    Bind: 0.20 &times; ${fmtNum(s.bind_propensity)} = ${d.calc_trail.uw_blend.bind_term}<br>
-                    <b>UW Score = ${d.calc_trail.uw_blend.total}</b>
-                </div>
-            </div>
         </div>
 
         <div class="card">
@@ -478,10 +480,6 @@ async function loadSubmissionDetail(id) {
         </div>
     `;
 
-    document.getElementById("uf-calc-trail-toggle").addEventListener("click", () => {
-        const body = document.getElementById("uf-calc-trail-body");
-        body.style.display = body.style.display === "none" ? "block" : "none";
-    });
     document.querySelectorAll("#uf-evidence-tabs button[data-tab]").forEach((btn) => btn.addEventListener("click", () => {
         if (btn.disabled) return;
         document.querySelectorAll("#uf-evidence-tabs button").forEach((b) => b.classList.remove("active-toggle"));
