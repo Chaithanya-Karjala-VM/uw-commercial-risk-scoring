@@ -39,23 +39,32 @@ app = FastAPI(title="Assisted Underwriting - UW Workbench API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 _PARQUET_PATH = SRC_DIR.parent / "data" / "UW_Risk_Score_Commercial_F.parquet"
+_SCORED_PARQUET_PATH = SRC_DIR.parent / "data" / "UW_Risk_Score_Commercial_Scored.parquet"
 
 print("Loading models and scoring the book (one-time, at startup)...")
 MODELS = load_models()
-if _PARQUET_PATH.exists():
-    # Pre-converted once from the same Excel file via load_data() (data/convert_to_parquet
-    # equivalent run locally, not part of the request path) - openpyxl's XML parsing peaks
-    # at ~170MB RAM and takes 80+ seconds for this file, which is what was blowing past
-    # Render's free-tier 512MB limit on deploy. Parquet reads the identical data in ~1s at
-    # a few MB. Verified byte-identical dtypes and scores against the Excel path before
-    # switching. The webapp never uses load_data()'s other 3 return values
-    # (schema/usable_for/output_cols - only feature_map.py's own independent feature lists
-    # matter here), so skipping them is safe.
-    _RAW_DF = pd.read_parquet(_PARQUET_PATH)
+if _SCORED_PARQUET_PATH.exists():
+    # Pre-scored once offline via the same score() call below (see
+    # webapp/backend/prescore_book.py), so the live process skips running all 3 models over
+    # 20,000 rows at every startup. Byte-identical to calling score(_RAW_DF, MODELS) here -
+    # verified by diffing the two before switching. Still loads MODELS above, since the
+    # What-If simulator and single-submission re-score need live predictions on demand.
+    BOOK = pd.read_parquet(_SCORED_PARQUET_PATH)
 else:
-    _RAW_DF, _, _, _ = load_data()
-_RAW_DF["effective_date"] = pd.to_datetime(_RAW_DF["effective_date"])
-BOOK = score(_RAW_DF, MODELS)
+    if _PARQUET_PATH.exists():
+        # Pre-converted once from the same Excel file via load_data() (data/convert_to_parquet
+        # equivalent run locally, not part of the request path) - openpyxl's XML parsing peaks
+        # at ~170MB RAM and takes 80+ seconds for this file, which is what was blowing past
+        # Render's free-tier 512MB limit on deploy. Parquet reads the identical data in ~1s at
+        # a few MB. Verified byte-identical dtypes and scores against the Excel path before
+        # switching. The webapp never uses load_data()'s other 3 return values
+        # (schema/usable_for/output_cols - only feature_map.py's own independent feature lists
+        # matter here), so skipping them is safe.
+        _RAW_DF = pd.read_parquet(_PARQUET_PATH)
+    else:
+        _RAW_DF, _, _, _ = load_data()
+    _RAW_DF["effective_date"] = pd.to_datetime(_RAW_DF["effective_date"])
+    BOOK = score(_RAW_DF, MODELS)
 LOB_OPTIONS = sorted(ALL_LOBS)
 REGION_OPTIONS = sorted(BOOK["risk_location_region"].dropna().unique().tolist())
 BROKER_TIER_OPTIONS = ["Platinum", "Gold", "Silver", "Bronze"]
