@@ -345,11 +345,11 @@ async function loadSubmissionDetail(id) {
                 <div>
                     <div style="display:grid; grid-template-columns:420px 1fr; align-items:center; gap:14px;">
                         <div class="gauge-row" style="flex-wrap:nowrap; overflow-x:auto;">
-                            ${ringGaugeHtml(s.loss_propensity, "Loss Score", "0 best / 100 worst", "var(--bad)", 62)}
-                            <div class="plus-sign">+</div>
                             ${ringGaugeHtml(s.appetite_capacity, "Appetite / Capacity", "higher = better fit", "var(--good)", 62)}
                             <div class="plus-sign">+</div>
                             ${ringGaugeHtml(s.bind_propensity, "Bind Score", "higher = more likely", "var(--accent)", 62)}
+                            <div class="plus-sign">+</div>
+                            ${ringGaugeHtml(s.loss_propensity, "Loss Score", "0 best / 100 worst", "var(--bad)", 62)}
                             <div class="equals-sign">=</div>
                         </div>
                         <div>
@@ -370,9 +370,9 @@ async function loadSubmissionDetail(id) {
                 <div>
                     <div class="sub-label" style="margin-top:0;">UW Score blend</div>
                     <div class="formula-box">
-                        Loss: 0.50 &times; (100 &minus; ${fmtNum(s.loss_propensity)}) = ${d.calc_trail.uw_blend.loss_term}<br>
                         Appetite: 0.30 &times; ${fmtNum(s.appetite_capacity)} = ${d.calc_trail.uw_blend.appetite_term}<br>
                         Bind: 0.20 &times; ${fmtNum(s.bind_propensity)} = ${d.calc_trail.uw_blend.bind_term}<br>
+                        Loss: 0.50 &times; (100 &minus; ${fmtNum(s.loss_propensity)}) = ${d.calc_trail.uw_blend.loss_term}<br>
                         <b>UW Score = ${d.calc_trail.uw_blend.total}</b>
                     </div>
                 </div>
@@ -383,7 +383,7 @@ async function loadSubmissionDetail(id) {
         <div class="decision-dim-row">
             <div class="card">
                 <div class="uf-dim-header">
-                    <div class="eyebrow">1 &middot; Appetite &amp; eligibility</div>
+                    <div class="eyebrow">Appetite &amp; eligibility</div>
                     ${ufPill(`${d.decision_dimensions.appetite_eligibility.hard_rules_passed} of ${d.decision_dimensions.appetite_eligibility.hard_rules_total} hard rules pass`, hardAllPass ? "var(--good)" : "var(--bad)")}
                 </div>
                 <div class="caption" style="margin-bottom:6px;">Can we write it?</div>
@@ -396,7 +396,7 @@ async function loadSubmissionDetail(id) {
             </div>
             <div class="card">
                 <div class="uf-dim-header">
-                    <div class="eyebrow">2 &middot; Exposure &amp; capacity</div>
+                    <div class="eyebrow">Exposure &amp; capacity</div>
                     ${ufPill(apDecisionShort, apDecisionColor)}
                 </div>
                 <div class="caption" style="margin-bottom:6px;">Do we have room?</div>
@@ -408,19 +408,7 @@ async function loadSubmissionDetail(id) {
             </div>
             <div class="card">
                 <div class="uf-dim-header">
-                    <div class="eyebrow">3 &middot; Loss &amp; complexity</div>
-                    ${ufPill(`Loss score ${fmtNum(s.loss_propensity, 0)} · loss tier ${s.loss_only_tier}`, TIER_COLORS[s.loss_only_tier])}
-                </div>
-                <div class="caption" style="margin-bottom:6px;">How risky is it?</div>
-                <div class="uf-dim-field">Current LR (CAT-dampened): <b style="color:${lrColor(loss.current_loss_ratio_pct)};">${fmtPct(loss.current_loss_ratio_pct)}</b></div>
-                <div class="uf-dim-field">Prior-period LR (5yr): <b style="color:${lrColor(loss.prior_period_loss_ratio_pct)};">${fmtPct(loss.prior_period_loss_ratio_pct)}</b></div>
-                <div class="uf-dim-field">Hazard index: <b>${fmtNum(loss.hazard_index, 3)}</b></div>
-                <div class="uf-dim-field">Predicted LR (model, uncapped): <b style="color:${lrColor(loss.predicted_loss_ratio_pct)};">${fmtPct(loss.predicted_loss_ratio_pct)}</b></div>
-                ${loss.flags ? `<div class="caption" style="margin-top:6px;">Flags: <i>${escapeHtml(loss.flags)}</i></div>` : ""}
-            </div>
-            <div class="card">
-                <div class="uf-dim-header">
-                    <div class="eyebrow">4 &middot; Broker &amp; bind</div>
+                    <div class="eyebrow">Broker &amp; bind</div>
                     ${ufPill(`Bind ${fmtNum(bb.bind_score, 0)} · ${bindTier.label}`, bindTier.color)}
                 </div>
                 <div class="caption" style="margin-bottom:6px;">Will it convert?</div>
@@ -429,6 +417,18 @@ async function loadSubmissionDetail(id) {
                 <div class="uf-dim-field">Competing quotes: <b>${fmtInt(bb.competing_quotes)}</b></div>
                 <div class="uf-dim-field">Quote-to-bind days: <b>${fmtInt(bb.quote_to_bind_days)}</b></div>
                 <div class="uf-dim-field">Renewal retention: <b>${fmtPct(bb.renewal_retention_pct)}</b></div>
+            </div>
+            <div class="card">
+                <div class="uf-dim-header">
+                    <div class="eyebrow">Loss &amp; complexity</div>
+                    ${ufPill(`Loss score ${fmtNum(s.loss_propensity, 0)} · loss tier ${s.loss_only_tier}`, TIER_COLORS[s.loss_only_tier])}
+                </div>
+                <div class="caption" style="margin-bottom:6px;">How risky is it?</div>
+                <div class="uf-dim-field">Current LR (CAT-dampened): <b style="color:${lrColor(loss.current_loss_ratio_pct)};">${fmtPct(loss.current_loss_ratio_pct)}</b></div>
+                <div class="uf-dim-field">Prior-period LR (5yr): <b style="color:${lrColor(loss.prior_period_loss_ratio_pct)};">${fmtPct(loss.prior_period_loss_ratio_pct)}</b></div>
+                <div class="uf-dim-field">Hazard index: <b>${fmtNum(loss.hazard_index, 3)}</b></div>
+                <div class="uf-dim-field">Predicted LR (model, uncapped): <b style="color:${lrColor(loss.predicted_loss_ratio_pct)};">${fmtPct(loss.predicted_loss_ratio_pct)}</b></div>
+                ${loss.flags ? `<div class="caption" style="margin-top:6px;">Flags: <i>${escapeHtml(loss.flags)}</i></div>` : ""}
             </div>
         </div>
 
