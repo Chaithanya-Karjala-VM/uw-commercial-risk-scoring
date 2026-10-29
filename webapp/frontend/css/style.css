@@ -180,7 +180,10 @@ label.field-label { display: block; font-size: 0.8rem; color: var(--text-muted);
     font-weight: 600; color: var(--text-main); margin-top: 8px; line-height: 1.6; }
 .mech-card { background: var(--card-bg); border: 2px solid var(--card-border); border-radius: 12px;
     padding: 14px 16px; margin-bottom: 14px; }
-.mech-title { font-weight: 800; font-size: 0.98rem; display: flex; align-items: center; margin-bottom: 12px; }
+.mech-title { font-weight: 800; font-size: 0.98rem; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.mech-badge { font-family: 'Inter', sans-serif; font-weight: 700; font-size: 0.72rem; color: var(--text-muted);
+    background: var(--page-bg); border: 1px solid var(--card-border); border-radius: 12px; padding: 3px 11px;
+    white-space: nowrap; letter-spacing: 0.02em; }
 .mech-weight { color: var(--text-muted); font-size: 0.76rem; margin-bottom: 2px; }
 .mech-question { color: var(--text-muted); font-size: 0.78rem; font-style: italic; margin-bottom: 10px; }
 .mech-group-label { font-weight: 700; font-size: 0.78rem; color: var(--accent); margin: 10px 0 4px; }

@@ -55,7 +55,7 @@ async function initModelNote() {
 function renderLossCard(loss) {
     return `
     <div class="mech-card" style="border-color:var(--bad);">
-        <div class="mech-title" style="color:var(--bad);">Loss score &mdash; weight ${loss.weight_pct}% &middot; 0 best, 100 worst</div>
+        <div class="mech-title" style="color:var(--bad);"><span>Loss score &mdash; weight ${loss.weight_pct}% &middot; 0 best, 100 worst</span><span class="mech-badge">Illustrative</span></div>
         <div class="mech-question">How much loss do we expect from this risk?</div>
         <div class="mech-group-label">Real pipeline (3 trained models)</div>
         <div>${loss.models.map((m) => `<span class="mech-chip">${escapeHtml(m)}</span>`).join("")}</div>
@@ -71,7 +71,7 @@ function renderAppetiteCard(ap) {
     const fitChips = Object.entries(ap.fit_coefficients).map(([k, v]) => `<span class="mech-chip">${escapeHtml(mechLabel(k))}: ${v}</span>`).join("");
     return `
     <div class="mech-card" style="border-color:var(--good);">
-        <div class="mech-title" style="color:var(--good);">Appetite / capacity &mdash; weight ${ap.weight_pct}% &middot; 0-100</div>
+        <div class="mech-title" style="color:var(--good);"><span>Appetite / capacity &mdash; weight ${ap.weight_pct}% &middot; 0-100</span><span class="mech-badge">Illustrative</span></div>
         <div class="mech-question">May we write it, and do we have room?</div>
         <div class="mech-group-label">Hard-rule gate (fail &rarr; score 0, Decline)</div>
         <div>${ap.hard_rules.map((r) => `<span class="mech-chip">${escapeHtml(r)}</span>`).join("")}</div>
@@ -93,7 +93,7 @@ function renderBindCard(bind) {
     `).join("");
     return `
     <div class="mech-card" style="border-color:var(--accent);">
-        <div class="mech-title" style="color:var(--accent);">Bind score &mdash; weight ${bind.weight_pct}% &middot; 0-100</div>
+        <div class="mech-title" style="color:var(--accent);"><span>Bind score &mdash; weight ${bind.weight_pct}% &middot; 0-100</span><span class="mech-badge">Illustrative</span></div>
         <div class="mech-question">If we quote, will the broker bind with us?</div>
         <div class="caption">${escapeHtml(bind.note)}</div>
         ${groupHtml}
@@ -111,7 +111,7 @@ function renderUwCard(uw) {
         </div>`).join("");
     return `
     <div class="mech-card" style="border-color:var(--navy);">
-        <div class="mech-title" style="color:var(--navy);">UW score &rarr; triage</div>
+        <div class="mech-title" style="color:var(--navy);"><span>UW score &rarr; triage</span><span class="mech-badge">Illustrative</span></div>
         <div class="formula-box">${escapeHtml(uw.formula)}</div>
         <div class="caption" style="margin:4px 0 10px;">${escapeHtml(uw.note)}</div>
         ${tierRows}
